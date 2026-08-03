@@ -82,8 +82,8 @@ export default function GuidedGeneratePage() {
       setRecommendedDocs(data);
       const autoChecked = data.filter((item: DocReference) => item.score >= 0.6).map((item: DocReference) => item.id);
       setSelectedIds(autoChecked);
-    } catch (err: any) {
-      setError(err.message);
+    } catch (err: unknown) {
+      setError(err instanceof Error ? err.message : "请求失败");
     } finally {
       setLoading(false);
     }
@@ -135,8 +135,8 @@ export default function GuidedGeneratePage() {
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || "AI 分段起草失败");
       setResultDraft(data.text);
-    } catch (err: any) {
-      setError(err.message);
+    } catch (err: unknown) {
+      setError(err instanceof Error ? err.message : "生成草稿失败");
     } finally {
       setLoading(false);
     }
@@ -175,8 +175,8 @@ export default function GuidedGeneratePage() {
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || "审查处理故障");
       setReviewIssues(data);
-    } catch (err: any) {
-      setReviewError(err.message || "连接超时");
+    } catch (err: unknown) {
+      setReviewError(err instanceof Error ? err.message : "连接超时");
     } finally {
       setReviewing(false);
     }
