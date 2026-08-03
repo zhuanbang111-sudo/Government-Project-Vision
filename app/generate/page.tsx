@@ -31,7 +31,7 @@ export default function GuidedGeneratePage() {
   // 向导内部表单状态
   const [topic, setTopic] = useState("");
   const [task, setTask] = useState<WritingTask>({ title: "", documentType: "工作报告", department: "", audience: "", purpose: "", timeRange: "", focus: "" });
-  const [, setAnalysis] = useState<WritingAnalysis | null>(null);
+  const [analysis, setAnalysis] = useState<WritingAnalysis | null>(null);
   const [recommendedDocs, setRecommendedDocs] = useState<DocReference[]>([]);
   const [selectedIds, setSelectedIds] = useState<number[]>([]);
   const [points, setPoints] = useState("");
@@ -286,6 +286,18 @@ export default function GuidedGeneratePage() {
             <input type="text" required placeholder="例如：开展全市安全生产排查与综合监管" value={topic} onChange={(e) => setTopic(e.target.value)} className={theme.input} />
           </div>
 
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+            <input required placeholder="材料标题" value={task.title} onChange={(e) => { setTask((current) => ({ ...current, title: e.target.value })); setTopic(e.target.value); }} className={theme.input} />
+            <select value={task.documentType} onChange={(e) => setTask((current) => ({ ...current, documentType: e.target.value as WritingTask["documentType"] }))} className={theme.input}>
+              {(["工作总结", "工作报告", "实施方案", "行动计划", "调研报告", "情况汇报"] as const).map((type) => <option key={type}>{type}</option>)}
+            </select>
+            <input required placeholder="牵头部门" value={task.department} onChange={(e) => setTask((current) => ({ ...current, department: e.target.value }))} className={theme.input} />
+            <input placeholder="报送对象" value={task.audience} onChange={(e) => setTask((current) => ({ ...current, audience: e.target.value }))} className={theme.input} />
+            <input required placeholder="写作目的" value={task.purpose} onChange={(e) => setTask((current) => ({ ...current, purpose: e.target.value }))} className={theme.input} />
+            <input placeholder="时间范围" value={task.timeRange} onChange={(e) => setTask((current) => ({ ...current, timeRange: e.target.value }))} className={theme.input} />
+            <input placeholder="重点关注事项" value={task.focus} onChange={(e) => setTask((current) => ({ ...current, focus: e.target.value }))} className={theme.input} />
+          </div>
+
           <div className="grid grid-cols-1 md:grid-cols-2 gap-5 pt-2">
             {/* 左半栏：可选段落组件包选框 */}
             <div className="border border-slate-200 p-4 rounded bg-slate-50/20">
@@ -352,6 +364,16 @@ export default function GuidedGeneratePage() {
       {/* 第2步 */}
       {step === 2 && (
         <div className="space-y-6">
+          {analysis && (
+            <section className="rounded border border-teal-100 bg-teal-50/40 p-4 text-xs text-slate-700">
+              <h3 className="mb-2 font-bold text-teal-900">AI 任务分析</h3>
+              <p className="mb-2">{analysis.documentPurpose}</p>
+              <div className="grid gap-3 md:grid-cols-2">
+                <div><p className="font-semibold">推荐结构</p><ol className="list-decimal pl-4">{analysis.recommendedStructure.map((item) => <li key={item}>{item}</li>)}</ol></div>
+                <div><p className="font-semibold">检索关键词</p><p>{analysis.keywords.join("、") || "未提供"}</p><p className="mt-2 font-semibold">风险提示</p><p>{analysis.riskPoints.join("；") || "无"}</p></div>
+              </div>
+            </section>
+          )}
           <h3 className={theme.sectionTitle}>第2步：选择深度参考语料</h3>
           <div className="space-y-3">
             <p className="text-xs text-slate-500">已自动推荐高度相关的历史公文。勾选您希望参考和模仿风格的文档：</p>
