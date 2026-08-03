@@ -134,6 +134,8 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ text: `${draft}\n\n--- 参考来源列表 ---\n${sources}`, referenceIds });
   } catch (error: unknown) {
     console.error("generate-v3 failed:", error);
-    return NextResponse.json({ error: asErrorMessage(error) }, { status: 500 });
+    const message = asErrorMessage(error);
+    const unavailable = error instanceof DOMException || /服务|超时|fetch|network|ECONN|ENOTFOUND/i.test(message);
+    return NextResponse.json({ error: message, retryable: unavailable }, { status: unavailable ? 503 : 500 });
   }
 }
