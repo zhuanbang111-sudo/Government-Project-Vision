@@ -52,6 +52,7 @@ export default function GuidedGeneratePage() {
   const [reviewing, setReviewing] = useState(false);
   const [reviewIssues, setReviewIssues] = useState<ReviewIssue[]>([]);
   const [reviewError, setReviewError] = useState<string | null>(null);
+  const [exporting, setExporting] = useState(false);
 
   // 挂载时拉取段落组件库类型
   useEffect(() => {
@@ -127,10 +128,20 @@ export default function GuidedGeneratePage() {
     setError(null);
     try {
       // 提交到 v3 接口：分段处理 + 整体润色
+      const contextualPoints = [
+        `文种：${task.documentType}`,
+        `牵头部门：${task.department}`,
+        task.audience ? `报送对象：${task.audience}` : "",
+        `写作目的：${task.purpose}`,
+        task.timeRange ? `时间范围：${task.timeRange}` : "",
+        task.focus ? `重点关注：${task.focus}` : "",
+        analysis?.recommendedStructure.length ? `已确认提纲：${analysis.recommendedStructure.join("；")}` : "",
+        `用户写作要点：${points}`,
+      ].filter(Boolean).join("\n");
       const res = await fetch("/api/generate-v3", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ topic, selectedParagraphs, points, newData, selectedIds }),
+        body: JSON.stringify({ topic, selectedParagraphs, points: contextualPoints, newData, selectedIds }),
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || "AI 分段起草失败");
@@ -194,6 +205,20 @@ export default function GuidedGeneratePage() {
     } else {
       alert("未能在正文中匹配到该片段。");
     }
+  };
+
+  const handleExportDocx = async () => {
+    setExporting(true);
+    try {
+      const response = await fetch("/api/export-docx", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ title: task.title || topic, content: body }) });
+      if (!response.ok) throw new Error("DOCX 导出失败");
+      const blob = await response.blob();
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement("a");
+      link.href = url; link.download = `${task.title || topic || "公文材料"}.docx`; link.click();
+      URL.revokeObjectURL(url);
+    } catch (caught: unknown) { setError(caught instanceof Error ? caught.message : "DOCX 导出失败"); }
+    finally { setExporting(false); }
   };
 
   const getBadgeStyle = (dimension: string) => {
@@ -408,6 +433,9 @@ export default function GuidedGeneratePage() {
               <button type="submit" disabled={loading} className={theme.secondaryBtn}>检索</button>
             </div>
           </form>
+          <div className="rounded border border-teal-100 bg-teal-50/40 px-3 py-2 text-xs text-teal-900">
+            已确认 {selectedIds.length} 份参考材料。它们将仅用于结构、措辞和有来源事实的写作参考；未选择的材料不会进入草稿生成。
+          </div>
           <div className="flex justify-between border-t pt-4">
             <button onClick={() => setStep(1)} className={theme.secondaryBtn}>上一步</button>
             <button onClick={() => setStep(3)} className={theme.primaryBtn}>下一步：拟写写作要求</button>
@@ -529,6 +557,10 @@ export default function GuidedGeneratePage() {
       {/* 第6步 */}
       {step === 6 && (
         <div className="space-y-6 py-6 text-center">
+          <section className="mx-auto max-w-[210mm] bg-white px-[28mm] py-[25mm] text-left text-slate-900 shadow-sm ring-1 ring-slate-200">
+            <h1 className="mb-8 text-center text-2xl font-bold leading-relaxed">{task.title || topic}</h1>
+            <div className="space-y-3 font-serif text-[16px] leading-8">{body.split(/\n+/).filter(Boolean).map((paragraph, index) => <p key={index} className="indent-8">{paragraph}</p>)}</div>
+          </section>
           <div className="inline-flex items-center justify-center w-12 h-12 bg-emerald-50 text-emerald-600 border border-emerald-200 rounded-full text-2xl mb-2 font-bold">✓</div>
           <h2 className="text-lg font-bold text-slate-900">第6步：公文撰写完成并已安全归档！</h2>
           <p className="text-xs text-slate-400 max-w-sm mx-auto">正文及来源引用条目已在本地完成持久化。</p>
@@ -539,6 +571,7 @@ export default function GuidedGeneratePage() {
           </div>
           <div className="border-t pt-6 space-x-3">
             <button onClick={() => { navigator.clipboard.writeText(resultDraft); alert("公文已被成功复制。"); }} className={theme.secondaryBtn}>复制公文最终稿</button>
+            <button onClick={handleExportDocx} disabled={exporting} className={theme.primaryBtn}>{exporting ? "正在生成 DOCX…" : "下载公文 DOCX"}</button>
             <button onClick={() => { setStep(1); setTopic(""); setPoints(""); setNewData(""); setResultDraft(""); }} className={theme.primaryBtn}>拟写新篇公文</button>
           </div>
         </div>
