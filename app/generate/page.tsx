@@ -3,6 +3,7 @@
 import React, { useState, useRef, useEffect } from "react";
 import Link from "next/link";
 import { theme } from "../ui-config";
+import type { WritingAnalysis, WritingTask } from "../../types/writing";
 
 interface DocReference {
   id: number;
@@ -29,6 +30,8 @@ export default function GuidedGeneratePage() {
 
   // 向导内部表单状态
   const [topic, setTopic] = useState("");
+  const [task, setTask] = useState<WritingTask>({ title: "", documentType: "工作报告", department: "", audience: "", purpose: "", timeRange: "", focus: "" });
+  const [, setAnalysis] = useState<WritingAnalysis | null>(null);
   const [recommendedDocs, setRecommendedDocs] = useState<DocReference[]>([]);
   const [selectedIds, setSelectedIds] = useState<number[]>([]);
   const [points, setPoints] = useState("");
@@ -88,8 +91,20 @@ export default function GuidedGeneratePage() {
 
   const handleStep1Submit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!topic.trim() || selectedParagraphs.length === 0) return;
-    setStep(2);
+    if (!task.title.trim() || !task.department.trim() || !task.purpose.trim() || selectedParagraphs.length === 0) return;
+    setLoading(true);
+    setError(null);
+    try {
+      const response = await fetch("/api/writing-analysis", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(task) });
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.error || "任务分析失败");
+      setAnalysis(data as WritingAnalysis);
+      setTopic(task.title);
+      setStep(2);
+    } catch (err: unknown) {
+      setError(err instanceof Error ? err.message : "任务分析失败");
+      return;
+    } finally { setLoading(false); }
     // 使用第一个勾选的段落和主题进行首轮语意检索推荐
     await triggerSemanticRecommendation(`${selectedParagraphs[0].name}关于${topic}`);
   };
