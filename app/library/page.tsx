@@ -42,7 +42,8 @@ export default function LibraryPage() {
   };
 
   useEffect(() => {
-    fetchDocuments();
+    const timer = window.setTimeout(() => { void fetchDocuments(); }, 0);
+    return () => window.clearTimeout(timer);
   }, []);
 
   // 2. 处理文件上传
@@ -89,6 +90,9 @@ export default function LibraryPage() {
 
       if (response.ok) {
         await fetchDocuments();
+      } else {
+        const payload = await response.json().catch(() => null) as { error?: string } | null;
+        alert(payload?.error || '删除失败，请重试');
       }
     } catch (error) {
       console.error('删除失败:', error);
