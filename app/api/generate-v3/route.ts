@@ -122,7 +122,16 @@ export async function POST(request: NextRequest) {
     if (typeof text !== "string" || !text.trim()) throw new Error("写作服务未返回有效文本");
 
     const sources = rankedDocuments.map((document, index) => `${index + 1}. [${document.filename}]`).join("\n") || "未使用参考文件";
-    return NextResponse.json({ text: `${extractDocument(text)}\n\n--- 参考来源列表 ---\n${sources}`, referenceIds: rankedDocuments.map((document) => document.id) });
+    const draft = extractDocument(text);
+    const referenceIds = rankedDocuments.map((document) => document.id);
+    const historyDb = new Database(path.join(process.cwd(), "data", "database.db"));
+    try {
+      historyDb.prepare("INSERT INTO generations (content, doc_type, topic, reference_ids) VALUES (?, ?, ?, ?)")
+        .run(draft, "guided", topic.trim(), JSON.stringify(referenceIds));
+    } finally {
+      historyDb.close();
+    }
+    return NextResponse.json({ text: `${draft}\n\n--- 参考来源列表 ---\n${sources}`, referenceIds });
   } catch (error: unknown) {
     console.error("generate-v3 failed:", error);
     return NextResponse.json({ error: asErrorMessage(error) }, { status: 500 });
