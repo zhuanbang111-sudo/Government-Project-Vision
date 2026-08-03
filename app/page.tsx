@@ -107,7 +107,7 @@ export default function HomePage() {
           <span>📂 知识资产极速录入通道（支持批量上传并自动分类）</span>
         </h3>
 
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
           
           {/* 板块 1：参考公文库 */}
           <div className="bg-white p-4 rounded border border-slate-200 flex flex-col justify-between space-y-3">
@@ -169,36 +169,6 @@ export default function HomePage() {
             )}
           </div>
 
-          {/* 板块 3：治理规则与职责库 */}
-          <div className="bg-white p-4 rounded border border-slate-200 flex flex-col justify-between space-y-3">
-            <div className="space-y-1">
-              <p className="font-bold text-teal-800 text-xs">3. 治理规则与职责</p>
-              <p className="text-gray-400 text-[10px]">自动分类为 department_rule</p>
-              <code className="block bg-slate-50 border rounded px-1.5 py-0.5 text-[9px] text-gray-500 font-mono">分类：治理规则与职责</code>
-            </div>
-            <div className="space-y-2 pt-2 border-t border-dashed">
-              <input
-                type="file"
-                multiple
-                accept=".xlsx,.xls"
-                onChange={(e: React.ChangeEvent<HTMLInputElement>) => setSelectedFiles((prev) => ({ ...prev, "部门职能库": e.target.files }))}
-                className="block w-full text-[10px] text-slate-500 file:mr-2 file:py-1 file:px-2 file:rounded file:border-0 file:text-[10px] file:bg-teal-50 file:text-teal-700"
-              />
-              <button
-                onClick={() => handleDirectUpload("部门职能库")}
-                disabled={uploadingType === "部门职能库"}
-                className="w-full py-1.5 bg-teal-700 hover:bg-teal-800 disabled:bg-gray-400 text-white rounded text-[11px] font-semibold transition-colors"
-              >
-                {uploadingType === "部门职能库" ? "职能绑定中..." : "上传并归档资产"}
-              </button>
-            </div>
-            {uploadResults["部门职能库"] && (
-              <div className="p-2 bg-slate-50 rounded text-[10px] text-slate-600 space-y-1">
-                <p className="font-bold text-emerald-700">成功: {uploadResults["部门职能库"].successCount} | 失败: {uploadResults["部门职能库"].failCount}</p>
-              </div>
-            )}
-          </div>
-
         </div>
 
         <p className="text-[10px] text-slate-400 mt-4 border-t pt-2 border-dashed border-slate-200">
@@ -207,19 +177,12 @@ export default function HomePage() {
       </div>
 
       {/* 核心指标统计卡片 */}
-      <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+      <div className="grid grid-cols-1 gap-4">
         <div className={`${theme.card} p-5 flex flex-col justify-between`}>
           <span className={theme.muted}>本地参考公文总库</span>
           <div className="flex items-baseline space-x-1.5 mt-2">
             <span className="text-2xl font-extrabold text-slate-800">{stats.docCount}</span>
             <span className="text-xs text-gray-400">篇</span>
-          </div>
-        </div>
-        <div className={`${theme.card} p-5 flex flex-col justify-between`}>
-          <span className={theme.muted}>部门定岗职责条款</span>
-          <div className="flex items-baseline space-x-1.5 mt-2">
-            <span className="text-2xl font-extrabold text-slate-800">{stats.funcCount}</span>
-            <span className="text-xs text-gray-400">条</span>
           </div>
         </div>
         <div className={`${theme.card} p-5 flex flex-col justify-between`}>
