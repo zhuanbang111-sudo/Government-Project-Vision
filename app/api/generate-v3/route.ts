@@ -89,13 +89,19 @@ export async function POST(request: NextRequest) {
     }
 
     const retrievalQuery = `${topic}\n${points}`.slice(0, MAX_INPUT_CHARS);
-    const queryVector = await fetchEmbedding(retrievalQuery, zhipuKey);
-    const rankedDocuments = documents
-      .map((document) => ({ document, score: cosineSimilarity(queryVector, readVector(document.vector_data) ?? []) }))
-      .filter(({ score }) => score > 0)
-      .sort((left, right) => right.score - left.score)
-      .slice(0, MAX_REFERENCE_DOCUMENTS)
-      .map(({ document }) => document);
+    let rankedDocuments: ReferenceDocument[];
+    try {
+      const queryVector = await fetchEmbedding(retrievalQuery, zhipuKey);
+      rankedDocuments = documents
+        .map((document) => ({ document, score: cosineSimilarity(queryVector, readVector(document.vector_data) ?? []) }))
+        .filter(({ score }) => score > 0)
+        .sort((left, right) => right.score - left.score)
+        .slice(0, MAX_REFERENCE_DOCUMENTS)
+        .map(({ document }) => document);
+    } catch (error) {
+      console.warn("Embedding retrieval unavailable; using selected documents.", error);
+      rankedDocuments = documents.slice(0, MAX_REFERENCE_DOCUMENTS);
+    }
 
     let remainingChars = MAX_REFERENCE_CHARS;
     const referenceText = rankedDocuments.map((document, index) => {
