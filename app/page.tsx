@@ -1,6 +1,6 @@
 "use client";
 
-import { ChangeEvent, useState } from "react";
+import { ChangeEvent, useEffect, useState } from "react";
 import Link from "next/link";
 import { theme } from "./ui-config";
 
@@ -18,6 +18,10 @@ export default function HomePage() {
     const response = await fetch("/api/stats");
     if (response.ok) setStats(await response.json() as Stats);
   };
+  useEffect(() => {
+    const timer = window.setTimeout(() => { void loadStats(); }, 0);
+    return () => window.clearTimeout(timer);
+  }, []);
   const upload = async () => {
     if (!files?.length) { setError("请先选择参考公文文件。"); return; }
     setUploading(true); setError(null); setResult(null);
@@ -37,9 +41,13 @@ export default function HomePage() {
     <section className={`${theme.card} bg-gradient-to-r from-teal-900 to-slate-900 border-none p-8 text-white`}>
       <h1 className="text-2xl font-bold">政府材料智能编制平台</h1>
       <p className="mt-2 max-w-2xl text-sm leading-relaxed text-teal-100">以参考公文语料为基础，支持任务分析、知识匹配、协同起草与合规审查。</p>
+      <div className="mt-6 flex flex-wrap gap-3">
+        <Link href="/generate" className="rounded bg-white px-4 py-2.5 text-xs font-bold text-teal-900 transition-colors hover:bg-teal-50">新建一份材料 →</Link>
+        <Link href="/library" className="rounded border border-teal-300/50 px-4 py-2.5 text-xs font-semibold text-white hover:bg-white/10">查看参考语料</Link>
+      </div>
     </section>
 
-    <section className={`${theme.card} p-6`}>
+    <section className={`${theme.card} border-teal-100 p-6`}>
       <div className="mb-4 flex items-center justify-between"><h2 className="font-bold text-slate-800">参考公文语料上传</h2><Link href="/library" className="text-xs font-semibold text-teal-800 hover:underline">进入知识资产中心 →</Link></div>
       <p className="mb-4 text-xs text-slate-500">上传 DOCX 参考公文，系统将提取正文并沉淀为写作检索资料。</p>
       <input type="file" multiple accept=".docx" onChange={(event: ChangeEvent<HTMLInputElement>) => setFiles(event.target.files)} className="block w-full text-xs text-slate-600 file:mr-3 file:rounded file:border-0 file:bg-teal-50 file:px-3 file:py-2 file:text-teal-800" />
