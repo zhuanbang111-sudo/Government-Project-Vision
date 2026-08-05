@@ -33,6 +33,17 @@ npm.cmd run cf:deploy
 
 不要把 API 密钥或 `.dev.vars` 提交到 Git。
 
+### Cloudflare Workers Builds（连接 GitHub）
+
+在 Cloudflare 控制台的 **Workers & Pages → 当前 Worker → Settings → Builds** 中设置：
+
+```text
+Build command:  npm ci && npm run cf:build
+Deploy command: npx wrangler deploy
+```
+
+`cf:build` 会生成 `.open-next/worker.js` 和 `.open-next/assets`；部署阶段再由 Wrangler 上传这些产物。不要将 Build command 留空后只运行 `npx wrangler deploy`，因为仓库中不会提交构建产物。
+
 ## 验证与本地开发
 
 ```powershell
