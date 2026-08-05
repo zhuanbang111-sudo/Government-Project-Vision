@@ -43,6 +43,16 @@ export default function LoginPage({ searchParams }: LoginPageProps) {
 
         {/* 密码提交表单 */}
         <form action={handleLogin} className="space-y-4">
+          <input
+            name="username"
+            type="text"
+            autoComplete="username"
+            value="government-writing-user"
+            readOnly
+            tabIndex={-1}
+            aria-hidden="true"
+            className="sr-only"
+          />
           <div>
             <input
               name="password"
