@@ -17,6 +17,10 @@ function fallbackAnalysis(task: Pick<WritingTask, "title" | "documentType" | "pu
 export async function POST(request: NextRequest) {
   try {
     const task = await request.json() as Partial<WritingTask>;
+    task.title = typeof task.title === "string" && task.title.trim() ? task.title.trim() : "未命名材料";
+    task.documentType = task.documentType || "工作报告";
+    task.department = typeof task.department === "string" && task.department.trim() ? task.department.trim() : "待明确牵头部门";
+    task.purpose = typeof task.purpose === "string" && task.purpose.trim() ? task.purpose.trim() : "形成可供审核的材料初稿";
     if (!task.title?.trim() || !task.documentType || !task.department?.trim() || !task.purpose?.trim()) return NextResponse.json({ error: "请完整填写任务定义" }, { status: 400 });
     const key = process.env.DEEPSEEK_API_KEY;
     if (!key) return NextResponse.json({ ...fallbackAnalysis(task as Pick<WritingTask, "title" | "documentType" | "purpose">), fallback: true });
