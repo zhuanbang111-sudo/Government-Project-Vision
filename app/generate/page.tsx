@@ -308,19 +308,19 @@ export default function GuidedGeneratePage() {
           
           <div>
             <label className={theme.label}>拟写新公文主题</label>
-            <input type="text" required placeholder="例如：开展全市安全生产排查与综合监管" value={topic} onChange={(e) => setTopic(e.target.value)} className={theme.input} />
+            <input type="text" required autoComplete="off" placeholder="例如：开展全市安全生产排查与综合监管" value={topic} onChange={(e) => setTopic(e.target.value)} className={theme.input} />
           </div>
 
           <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-            <input required placeholder="材料标题" value={task.title} onChange={(e) => { setTask((current) => ({ ...current, title: e.target.value })); setTopic(e.target.value); }} className={theme.input} />
+            <input required autoComplete="off" placeholder="材料标题" value={task.title} onChange={(e) => { setTask((current) => ({ ...current, title: e.target.value })); setTopic(e.target.value); }} className={theme.input} />
             <select value={task.documentType} onChange={(e) => setTask((current) => ({ ...current, documentType: e.target.value as WritingTask["documentType"] }))} className={theme.input}>
               {(["工作总结", "工作报告", "实施方案", "行动计划", "调研报告", "情况汇报"] as const).map((type) => <option key={type}>{type}</option>)}
             </select>
-            <input required placeholder="牵头部门" value={task.department} onChange={(e) => setTask((current) => ({ ...current, department: e.target.value }))} className={theme.input} />
-            <input placeholder="报送对象" value={task.audience} onChange={(e) => setTask((current) => ({ ...current, audience: e.target.value }))} className={theme.input} />
-            <input required placeholder="写作目的" value={task.purpose} onChange={(e) => setTask((current) => ({ ...current, purpose: e.target.value }))} className={theme.input} />
-            <input placeholder="时间范围" value={task.timeRange} onChange={(e) => setTask((current) => ({ ...current, timeRange: e.target.value }))} className={theme.input} />
-            <input placeholder="重点关注事项" value={task.focus} onChange={(e) => setTask((current) => ({ ...current, focus: e.target.value }))} className={theme.input} />
+            <input required autoComplete="organization" placeholder="牵头部门" value={task.department} onChange={(e) => setTask((current) => ({ ...current, department: e.target.value }))} className={theme.input} />
+            <input autoComplete="off" placeholder="报送对象" value={task.audience} onChange={(e) => setTask((current) => ({ ...current, audience: e.target.value }))} className={theme.input} />
+            <input required autoComplete="off" placeholder="写作目的" value={task.purpose} onChange={(e) => setTask((current) => ({ ...current, purpose: e.target.value }))} className={theme.input} />
+            <input autoComplete="off" placeholder="时间范围" value={task.timeRange} onChange={(e) => setTask((current) => ({ ...current, timeRange: e.target.value }))} className={theme.input} />
+            <input autoComplete="off" placeholder="重点关注事项" value={task.focus} onChange={(e) => setTask((current) => ({ ...current, focus: e.target.value }))} className={theme.input} />
           </div>
 
           <div className="grid grid-cols-1 md:grid-cols-2 gap-5 pt-2">
@@ -429,7 +429,7 @@ export default function GuidedGeneratePage() {
           </div>
           <form onSubmit={handleManualSearch} className="border-t pt-4">
             <div className="flex gap-2">
-              <input type="text" placeholder="手动输入其他搜索词匹配追加检索..." value={manualKeyword} onChange={(e) => setManualKeyword(e.target.value)} className={theme.input} />
+              <input type="text" autoComplete="off" placeholder="手动输入其他搜索词匹配追加检索..." value={manualKeyword} onChange={(e) => setManualKeyword(e.target.value)} className={theme.input} />
               <button type="submit" disabled={loading} className={theme.secondaryBtn}>检索</button>
             </div>
           </form>

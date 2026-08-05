@@ -47,6 +47,7 @@ export default function LoginPage({ searchParams }: LoginPageProps) {
             <input
               name="password"
               type="password"
+              autoComplete="current-password"
               required
               placeholder="请输入密码"
               className="w-full p-2.5 border border-gray-300 rounded text-sm focus:outline-none focus:ring-1 focus:ring-blue-500"

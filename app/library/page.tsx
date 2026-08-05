@@ -275,6 +275,7 @@ export default function LibraryPage() {
               <input
                 id="department"
                 type="text"
+                autoComplete="organization"
                 value={department}
                 onChange={(e: React.ChangeEvent<HTMLInputElement>) => setDepartment(e.target.value)}
                 placeholder="例如：城建处"
@@ -327,6 +328,7 @@ export default function LibraryPage() {
             <div className="relative w-full sm:w-72">
               <input
                 type="text"
+                autoComplete="off"
                 placeholder="在库中检索高价值知识资产..."
                 value={searchQuery}
                 onChange={(e: React.ChangeEvent<HTMLInputElement>) => setSearchQuery(e.target.value)}

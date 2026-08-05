@@ -70,6 +70,7 @@ export default function SearchPage() {
           <input
             type="text"
             required
+            autoComplete="off"
             placeholder="请输入您要查找的内容，例如：以前写过哪些关于环保或安全检查的公文？"
             value={query}
             onChange={(e) => setQuery(e.target.value)}

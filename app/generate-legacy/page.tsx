@@ -64,11 +64,11 @@ export default function LegacyGeneratePage() {
           </div>
           <div>
             <label className="block text-sm font-medium mb-1">公文文种</label>
-            <input type="text" value={docType} onChange={(e) => setDocType(e.target.value)} className="w-full border rounded p-2 text-sm" />
+            <input type="text" autoComplete="off" value={docType} onChange={(e) => setDocType(e.target.value)} className="w-full border rounded p-2 text-sm" />
           </div>
           <div>
             <label className="block text-sm font-medium mb-1">新公文主题</label>
-            <input type="text" value={topic} onChange={(e) => setTopic(e.target.value)} className="w-full border rounded p-2 text-sm" />
+            <input type="text" autoComplete="off" value={topic} onChange={(e) => setTopic(e.target.value)} className="w-full border rounded p-2 text-sm" />
           </div>
           <div>
             <label className="block text-sm font-medium mb-1">核心要点</label>
