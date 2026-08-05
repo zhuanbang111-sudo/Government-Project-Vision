@@ -9,7 +9,7 @@
   "d1_databases": [{
     "binding": "APP_DB",
     "database_name": "government-project-vision",
-    "database_id": "REPLACE_WITH_D1_DATABASE_ID",
+    "database_id": "faf45393-89c5-4132-a80a-379f93bf4eca",
     "migrations_dir": "migrations"
   }],
   "r2_buckets": [
