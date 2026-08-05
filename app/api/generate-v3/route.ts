@@ -1,6 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import Database from "better-sqlite3";
-import path from "path";
+import { getDatabase, placeholders } from "../_platform";
 
 type ParagraphType = { id: number; name: string; description: string };
 type ReferenceDocument = { id: number; filename: string; content: string; vector_data: string | null };
@@ -76,16 +75,12 @@ export async function POST(request: NextRequest) {
     if (!deepseekKey || !zhipuKey) return NextResponse.json({ error: "生成服务的密钥配置不完整" }, { status: 500 });
 
     const ids = Array.isArray(selectedIds) ? selectedIds.filter((id): id is number => Number.isInteger(id) && id > 0) : [];
-    const db = new Database(path.join(process.cwd(), "data", "database.db"));
+    const db = await getDatabase();
     let documents: ReferenceDocument[];
-    try {
-      if (ids.length > 0) {
-        documents = db.prepare(`SELECT id, filename, content, vector_data FROM documents WHERE id IN (${ids.map(() => "?").join(",")})`).all(...ids) as ReferenceDocument[];
-      } else {
-        documents = db.prepare("SELECT id, filename, content, vector_data FROM documents WHERE vector_data IS NOT NULL AND vector_data != ''").all() as ReferenceDocument[];
-      }
-    } finally {
-      db.close();
+    if (ids.length > 0) {
+      documents = (await db.prepare(`SELECT id, filename, content, vector_data FROM documents WHERE id IN (${placeholders(ids)})`).bind(...ids).all<ReferenceDocument>()).results;
+    } else {
+      documents = (await db.prepare("SELECT id, filename, content, vector_data FROM documents").all<ReferenceDocument>()).results;
     }
 
     const retrievalQuery = `${topic}\n${points}`.slice(0, MAX_INPUT_CHARS);
@@ -130,13 +125,8 @@ export async function POST(request: NextRequest) {
     const sources = rankedDocuments.map((document, index) => `${index + 1}. [${document.filename}]`).join("\n") || "未使用参考文件";
     const draft = extractDocument(text);
     const referenceIds = rankedDocuments.map((document) => document.id);
-    const historyDb = new Database(path.join(process.cwd(), "data", "database.db"));
-    try {
-      historyDb.prepare("INSERT INTO generations (content, doc_type, topic, reference_ids) VALUES (?, ?, ?, ?)")
-        .run(draft, "guided", topic.trim(), JSON.stringify(referenceIds));
-    } finally {
-      historyDb.close();
-    }
+    await db.prepare("INSERT INTO generations (content, doc_type, topic, reference_ids) VALUES (?, ?, ?, ?)")
+      .bind(draft, "guided", topic.trim(), JSON.stringify(referenceIds)).run();
     return NextResponse.json({ text: `${draft}\n\n--- 参考来源列表 ---\n${sources}`, referenceIds });
   } catch (error: unknown) {
     console.error("generate-v3 failed:", error);

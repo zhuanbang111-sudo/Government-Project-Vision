@@ -1,16 +1,12 @@
 import { NextResponse } from "next/server";
-import Database from "better-sqlite3";
-import path from "path";
 import { errorMessage } from "../_shared";
+import { getDatabase } from "../_platform";
 
 export async function GET() {
   try {
-    const db = new Database(path.join(process.cwd(), "data", "database.db"));
-    try {
-      return NextResponse.json(db.prepare("SELECT * FROM documents ORDER BY created_at DESC").all());
-    } finally {
-      db.close();
-    }
+    const db = await getDatabase();
+    const { results } = await db.prepare("SELECT * FROM documents ORDER BY created_at DESC").all();
+    return NextResponse.json(results);
   } catch (error: unknown) {
     return NextResponse.json({ error: errorMessage(error) }, { status: 500 });
   }

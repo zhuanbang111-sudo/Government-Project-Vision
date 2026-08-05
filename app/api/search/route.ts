@@ -1,10 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
-import Database from "better-sqlite3";
-import path from "path";
+import { getDatabase } from "../_platform";
 
 type Row = { id: number; filename: string; department: string | null; doc_type: string | null; content: string; vector_data: string | null };
 const MAX_RESULTS = 8;
-const dbPath = () => path.join(process.cwd(), "data", "database.db");
 
 function lexicalSearch(rows: Row[], query: string) {
   const terms = query.toLowerCase().split(/\s+/).filter(Boolean);
@@ -19,10 +17,8 @@ export async function POST(request: NextRequest) {
   const body = await request.json().catch(() => null) as { query?: unknown } | null;
   const query = body?.query;
   if (typeof query !== "string" || !query.trim()) return NextResponse.json({ error: "搜索词不能为空" }, { status: 400 });
-  const db = new Database(dbPath());
-  let rows: Row[];
-  try { rows = db.prepare("SELECT id, filename, department, doc_type, content, vector_data FROM documents").all() as Row[]; }
-  finally { db.close(); }
+  const db = await getDatabase();
+  const { results: rows } = await db.prepare("SELECT id, filename, department, doc_type, content, vector_data FROM documents").all<Row>();
   const matches = lexicalSearch(rows, query.trim());
   const degraded = true;
   const key = process.env.ZHIPU_API_KEY;

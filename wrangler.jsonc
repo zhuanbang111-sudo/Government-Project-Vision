@@ -1,0 +1,20 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "government-project-vision",
+  "main": ".open-next/worker.js",
+  "compatibility_date": "2026-08-05",
+  "compatibility_flags": ["nodejs_compat", "global_fetch_strictly_public"],
+  "assets": { "directory": ".open-next/assets", "binding": "ASSETS" },
+  "services": [{ "binding": "WORKER_SELF_REFERENCE", "service": "government-project-vision" }],
+  "d1_databases": [{
+    "binding": "APP_DB",
+    "database_name": "government-project-vision",
+    "database_id": "REPLACE_WITH_D1_DATABASE_ID",
+    "migrations_dir": "migrations"
+  }],
+  "r2_buckets": [
+    { "binding": "DOCUMENTS_BUCKET", "bucket_name": "government-project-vision-documents" },
+    { "binding": "NEXT_INC_CACHE_R2_BUCKET", "bucket_name": "government-project-vision-cache" }
+  ],
+  "observability": { "enabled": true, "head_sampling_rate": 1 }
+}
