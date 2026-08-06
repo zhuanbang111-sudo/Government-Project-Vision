@@ -5,11 +5,17 @@ import { errorMessage } from "../_shared";
 
 export const dynamic = "force-dynamic";
 
+class ProviderTestError extends Error {
+  constructor(message: string, readonly status: number) {
+    super(message);
+  }
+}
+
 function providerError(service: string, status: number, payload: unknown) {
-  const message = typeof payload === "object" && payload !== null
-    ? (payload as { error?: { message?: unknown }; message?: unknown }).error?.message ?? (payload as { message?: unknown }).message
-    : undefined;
-  return `${service}返回 ${status}${typeof message === "string" && message.trim() ? `：${message.trim().slice(0, 240)}` : ""}`;
+  const error = typeof payload === "object" && payload !== null ? (payload as { error?: { message?: unknown; code?: unknown }; message?: unknown }).error : undefined;
+  const message = error?.message ?? (payload as { message?: unknown } | null)?.message;
+  const code = error?.code;
+  return `${service}返回 ${status}${typeof code === "string" || typeof code === "number" ? `（${code}）` : ""}${typeof message === "string" && message.trim() ? `：${message.trim().slice(0, 240)}` : ""}`;
 }
 
 async function readJson(response: Response) {
@@ -81,7 +87,7 @@ export async function POST(request: NextRequest) {
         signal: AbortSignal.timeout(15_000),
       });
       const payload = await readJson(response);
-      if (!response.ok) throw new Error(providerError("DeepSeek AI 服务", response.status, payload));
+      if (!response.ok) throw new ProviderTestError(providerError("DeepSeek AI 服务", response.status, payload), response.status);
       return NextResponse.json({ ok: true, message: `AI 服务连接正常（${ai.model}）`, endpoint: getChatCompletionsUrl(ai.baseUrl) });
     }
     if (action === "test-embedding") {
@@ -94,7 +100,7 @@ export async function POST(request: NextRequest) {
         signal: AbortSignal.timeout(15_000),
       });
       const payload = await readJson(response);
-      if (!response.ok) throw new Error(providerError("智谱向量服务", response.status, payload));
+      if (!response.ok) throw new ProviderTestError(providerError("智谱向量服务", response.status, payload), response.status);
       const vector = (payload as { data?: Array<{ embedding?: unknown }> }).data?.[0]?.embedding;
       if (!Array.isArray(vector) || !vector.every((item) => typeof item === "number")) {
         throw new Error("智谱向量服务未返回有效向量");
@@ -103,6 +109,9 @@ export async function POST(request: NextRequest) {
     }
     return NextResponse.json({ error: "不支持的连接测试类型" }, { status: 400 });
   } catch (error) {
+    if (error instanceof ProviderTestError) {
+      return NextResponse.json({ ok: false, status: error.status, message: error.message, retryable: error.status === 429 || error.status >= 500 });
+    }
     return NextResponse.json({ ok: false, message: errorMessage(error) }, { status: 502 });
   }
 }

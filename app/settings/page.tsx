@@ -50,7 +50,7 @@ export default function SettingsPage() {
     setTesting(action === "test-storage" ? "storage" : action === "test-ai" ? "ai" : "embedding"); setNotice(null);
     try {
       const response = await fetch("/api/settings", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ action }) });
-      const payload = await response.json() as { ok?: boolean; message?: string; error?: string };
+      const payload = await response.json() as { ok?: boolean; status?: number; message?: string; error?: string; retryable?: boolean };
       setNotice({ kind: response.ok && payload.ok ? "success" : "error", text: payload.message || payload.error || "连接测试失败" });
     } catch { setNotice({ kind: "error", text: "连接测试请求失败" }); }
     finally { setTesting(null); }
