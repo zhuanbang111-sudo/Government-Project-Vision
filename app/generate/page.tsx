@@ -57,8 +57,9 @@ export default function GuidedGeneratePage() {
   // 挂载时拉取段落组件库类型
   useEffect(() => {
     fetch("/api/paragraph-types")
-      .then((res) => res.json())
-      .then((data) => {
+      .then(async (res) => ({ ok: res.ok, data: await res.json() as unknown }))
+      .then(({ ok, data }) => {
+        if (!ok || !Array.isArray(data)) throw new Error("段落类型加载失败");
         setAllParagraphTypes(data);
         // 默认将前4个常用段落预先勾选上，提供顺滑初体验
         if (data.length > 0) {
@@ -78,8 +79,8 @@ export default function GuidedGeneratePage() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ query: keyword }),
       });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error || "检索发生故障");
+      const data: unknown = await res.json();
+      if (!res.ok || !Array.isArray(data)) throw new Error((data as { error?: string })?.error || "检索发生故障");
       setRecommendedDocs(data);
       const autoChecked = data.filter((item: DocReference) => item.score >= 0.6).map((item: DocReference) => item.id);
       setSelectedIds(autoChecked);
@@ -183,8 +184,8 @@ export default function GuidedGeneratePage() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ draftContent: resultDraft, selectedIds }),
       });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error || "审查处理故障");
+      const data: unknown = await res.json();
+      if (!res.ok || !Array.isArray(data)) throw new Error((data as { error?: string })?.error || "审查处理故障");
       setReviewIssues(data);
     } catch (err: unknown) {
       setReviewError(err instanceof Error ? err.message : "连接超时");

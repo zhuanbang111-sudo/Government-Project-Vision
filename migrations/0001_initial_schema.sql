@@ -32,6 +32,13 @@ CREATE TABLE IF NOT EXISTS paragraph_types (
   created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 
+INSERT OR IGNORE INTO paragraph_types (name, description) VALUES
+  ('工作背景与总体要求', '说明政策背景、现实需要、总体目标和指导原则。'),
+  ('重点任务', '分条明确工作任务、责任要求和推进重点。'),
+  ('实施步骤', '按时间节点说明组织推进、阶段安排和具体动作。'),
+  ('保障措施', '说明组织保障、协同机制、监督评估和风险防控要求。'),
+  ('结语', '形成请示、报告或动员材料的规范结尾。');
+
 CREATE TABLE IF NOT EXISTS generations (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   content TEXT NOT NULL,

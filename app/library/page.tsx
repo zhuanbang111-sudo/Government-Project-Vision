@@ -31,8 +31,8 @@ export default function LibraryPage() {
       setLoading(true);
       const response = await fetch('/api/documents');
       if (response.ok) {
-        const data = await response.json();
-        setDocuments(data);
+        const data: unknown = await response.json();
+        setDocuments(Array.isArray(data) ? data as Document[] : []);
       }
     } catch (error) {
       console.error('获取文档失败:', error);

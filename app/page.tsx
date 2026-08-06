@@ -4,7 +4,7 @@ import { ChangeEvent, useEffect, useState } from "react";
 import Link from "next/link";
 import { theme } from "./ui-config";
 
-type Stats = { docCount: number; genCount: number };
+type Stats = { documentCount?: number; generatedCount?: number; docCount?: number; genCount?: number };
 type UploadResult = { successCount: number; failCount: number; details: Array<{ filename: string; status: string; message: string }> };
 
 export default function HomePage() {
@@ -16,7 +16,9 @@ export default function HomePage() {
 
   const loadStats = async () => {
     const response = await fetch("/api/stats");
-    if (response.ok) setStats(await response.json() as Stats);
+    if (!response.ok) return;
+    const payload: unknown = await response.json();
+    if (typeof payload === "object" && payload !== null) setStats(payload as Stats);
   };
   useEffect(() => {
     const timer = window.setTimeout(() => { void loadStats(); }, 0);
@@ -57,8 +59,8 @@ export default function HomePage() {
     </section>
 
     <section className="grid grid-cols-1 gap-4 sm:grid-cols-2">
-      <div className={theme.card}><p className={theme.muted}>本地参考公文</p><p className="mt-2 text-2xl font-extrabold text-slate-800">{stats.docCount}</p></div>
-      <div className={theme.card}><p className={theme.muted}>已归档生成稿</p><p className="mt-2 text-2xl font-extrabold text-slate-800">{stats.genCount}</p></div>
+      <div className={theme.card}><p className={theme.muted}>本地参考公文</p><p className="mt-2 text-2xl font-extrabold text-slate-800">{stats.documentCount ?? stats.docCount ?? 0}</p></div>
+      <div className={theme.card}><p className={theme.muted}>已归档生成稿</p><p className="mt-2 text-2xl font-extrabold text-slate-800">{stats.generatedCount ?? stats.genCount ?? 0}</p></div>
     </section>
     <section className={`${theme.card} flex flex-col items-start justify-between gap-4 sm:flex-row sm:items-center`}><div><h2 className="font-bold text-slate-800">引导式智能写作</h2><p className="mt-1 text-xs text-slate-500">定义任务、确认资料、生成草稿并执行合规审查。</p></div><Link href="/generate" className={theme.primaryBtn}>启动写作流程</Link></section>
   </div>;

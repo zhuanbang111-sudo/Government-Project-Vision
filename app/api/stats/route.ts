@@ -9,6 +9,8 @@ export async function GET() {
       db.prepare("SELECT COUNT(*) AS count FROM documents").first<{ count: number }>(),
       db.prepare("SELECT COUNT(*) AS count FROM generations").first<{ count: number }>(),
     ]);
-    return NextResponse.json({ documentCount: documents?.count ?? 0, generatedCount: generations?.count ?? 0 });
+    const documentCount = documents?.count ?? 0;
+    const generatedCount = generations?.count ?? 0;
+    return NextResponse.json({ documentCount, generatedCount, docCount: documentCount, genCount: generatedCount });
   } catch (error) { return NextResponse.json({ error: errorMessage(error) }, { status: 500 }); }
 }
