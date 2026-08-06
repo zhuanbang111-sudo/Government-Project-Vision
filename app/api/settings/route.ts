@@ -5,6 +5,19 @@ import { errorMessage } from "../_shared";
 
 export const dynamic = "force-dynamic";
 
+function providerError(service: string, status: number, payload: unknown) {
+  const message = typeof payload === "object" && payload !== null
+    ? (payload as { error?: { message?: unknown }; message?: unknown }).error?.message ?? (payload as { message?: unknown }).message
+    : undefined;
+  return `${service}返回 ${status}${typeof message === "string" && message.trim() ? `：${message.trim().slice(0, 240)}` : ""}`;
+}
+
+async function readJson(response: Response) {
+  const raw = await response.text();
+  if (!raw.trim()) return null;
+  try { return JSON.parse(raw) as unknown; } catch { return { message: raw.slice(0, 240) }; }
+}
+
 async function getSettingsPayload() {
   const { APP_DB } = await getPlatformEnv();
   const [ai, documentCount] = await Promise.all([
@@ -67,7 +80,8 @@ export async function POST(request: NextRequest) {
         headers: { Authorization: `Bearer ${process.env.DEEPSEEK_API_KEY}` },
         signal: AbortSignal.timeout(15_000),
       });
-      if (!response.ok) throw new Error(`AI 服务返回 ${response.status}`);
+      const payload = await readJson(response);
+      if (!response.ok) throw new Error(providerError("DeepSeek AI 服务", response.status, payload));
       return NextResponse.json({ ok: true, message: `AI 服务连接正常（${ai.model}）`, endpoint: getChatCompletionsUrl(ai.baseUrl) });
     }
     if (action === "test-embedding") {
@@ -79,8 +93,8 @@ export async function POST(request: NextRequest) {
         body: JSON.stringify({ model: "embedding-3", input: "政府公文语料向量化连接测试" }),
         signal: AbortSignal.timeout(15_000),
       });
-      const payload: unknown = await response.json();
-      if (!response.ok) throw new Error(`智谱向量服务返回 ${response.status}`);
+      const payload = await readJson(response);
+      if (!response.ok) throw new Error(providerError("智谱向量服务", response.status, payload));
       const vector = (payload as { data?: Array<{ embedding?: unknown }> }).data?.[0]?.embedding;
       if (!Array.isArray(vector) || !vector.every((item) => typeof item === "number")) {
         throw new Error("智谱向量服务未返回有效向量");
