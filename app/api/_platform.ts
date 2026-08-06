@@ -7,7 +7,7 @@ type D1Statement = {
   run: () => Promise<{ meta: { changes?: number; last_row_id?: number } }>;
 };
 
-type D1DatabaseLike = {
+export type D1DatabaseLike = {
   prepare: (query: string) => D1Statement;
   batch: (statements: D1Statement[]) => Promise<unknown>;
 };
@@ -15,6 +15,7 @@ type D1DatabaseLike = {
 type R2BucketLike = {
   put: (key: string, value: ArrayBuffer, options?: { httpMetadata?: { contentType?: string } }) => Promise<unknown>;
   delete: (key: string) => Promise<void>;
+  head: (key: string) => Promise<unknown>;
 };
 
 type PlatformEnv = {

@@ -1,0 +1,77 @@
+import { NextRequest, NextResponse } from "next/server";
+import { getPlatformEnv } from "../_platform";
+import { getWritingAiSettings, getChatCompletionsUrl, validateWritingAiSettings } from "../_settings";
+import { errorMessage } from "../_shared";
+
+export const dynamic = "force-dynamic";
+
+async function getSettingsPayload() {
+  const { APP_DB } = await getPlatformEnv();
+  const [ai, documentCount] = await Promise.all([
+    getWritingAiSettings(APP_DB),
+    APP_DB.prepare("SELECT COUNT(*) AS count FROM documents").first<{ count: number }>(),
+  ]);
+  return {
+    storage: {
+      mode: "cloudflare" as const,
+      database: "Cloudflare D1 (APP_DB)",
+      objectStorage: "Cloudflare R2 (DOCUMENTS_BUCKET)",
+      localConfigurationAvailable: false,
+    },
+    ai,
+    backup: {
+      status: "archive-active" as const,
+      message: "原始 DOCX 已归档至 R2，元数据与可检索正文保存在 D1。建议另行配置定期导出作为异地备份。",
+      documentCount: Number(documentCount?.count ?? 0),
+    },
+  };
+}
+
+export async function GET() {
+  try {
+    return NextResponse.json(await getSettingsPayload());
+  } catch (error) {
+    return NextResponse.json({ error: errorMessage(error) }, { status: 500 });
+  }
+}
+
+export async function PUT(request: NextRequest) {
+  try {
+    const body: unknown = await request.json();
+    const { baseUrl, model } = body as { baseUrl?: unknown; model?: unknown };
+    const settings = validateWritingAiSettings(baseUrl, model);
+    const { APP_DB } = await getPlatformEnv();
+    await APP_DB.batch([
+      APP_DB.prepare("INSERT INTO app_settings (setting_key, setting_value) VALUES (?, ?) ON CONFLICT(setting_key) DO UPDATE SET setting_value = excluded.setting_value, updated_at = CURRENT_TIMESTAMP").bind("ai_base_url", settings.baseUrl),
+      APP_DB.prepare("INSERT INTO app_settings (setting_key, setting_value) VALUES (?, ?) ON CONFLICT(setting_key) DO UPDATE SET setting_value = excluded.setting_value, updated_at = CURRENT_TIMESTAMP").bind("ai_model", settings.model),
+    ]);
+    return NextResponse.json(await getSettingsPayload());
+  } catch (error) {
+    return NextResponse.json({ error: errorMessage(error) }, { status: 400 });
+  }
+}
+
+export async function POST(request: NextRequest) {
+  try {
+    const body: unknown = await request.json();
+    const action = (body as { action?: unknown }).action;
+    const { APP_DB, DOCUMENTS_BUCKET } = await getPlatformEnv();
+    if (action === "test-storage") {
+      await Promise.all([APP_DB.prepare("SELECT 1 AS ready").first(), DOCUMENTS_BUCKET.head("__settings_connection_check__")]);
+      return NextResponse.json({ ok: true, message: "D1 与 R2 连接正常" });
+    }
+    if (action === "test-ai") {
+      const ai = await getWritingAiSettings(APP_DB);
+      if (!ai.apiKeyConfigured) return NextResponse.json({ ok: false, message: "未检测到 DEEPSEEK_API_KEY Cloudflare Secret" }, { status: 400 });
+      const response = await fetch(new URL("/models", ai.baseUrl), {
+        headers: { Authorization: `Bearer ${process.env.DEEPSEEK_API_KEY}` },
+        signal: AbortSignal.timeout(15_000),
+      });
+      if (!response.ok) throw new Error(`AI 服务返回 ${response.status}`);
+      return NextResponse.json({ ok: true, message: `AI 服务连接正常（${ai.model}）`, endpoint: getChatCompletionsUrl(ai.baseUrl) });
+    }
+    return NextResponse.json({ error: "不支持的连接测试类型" }, { status: 400 });
+  } catch (error) {
+    return NextResponse.json({ ok: false, message: errorMessage(error) }, { status: 502 });
+  }
+}

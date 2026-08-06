@@ -9,6 +9,7 @@ const navItems = [
   { name: "新建材料", path: "/generate" },
   { name: "历史材料检索", path: "/search" },
   { name: "参考公文语料", path: "/library" },
+  { name: "系统设置", path: "/settings" },
 ];
 
 export default function LayoutClient({ children }: { children: ReactNode }) {

@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getDatabase, placeholders } from "../_platform";
+import { getChatCompletionsUrl, getWritingAiSettings } from "../_settings";
 
 type ParagraphType = { id: number; name: string; description: string };
 type ReferenceDocument = { id: number; filename: string; content: string; vector_data: string | null };
@@ -76,6 +77,7 @@ export async function POST(request: NextRequest) {
 
     const ids = Array.isArray(selectedIds) ? selectedIds.filter((id): id is number => Number.isInteger(id) && id > 0) : [];
     const db = await getDatabase();
+    const aiSettings = await getWritingAiSettings(db);
     let documents: ReferenceDocument[];
     if (ids.length > 0) {
       documents = (await db.prepare(`SELECT id, filename, content, vector_data FROM documents WHERE id IN (${placeholders(ids)})`).bind(...ids).all<ReferenceDocument>()).results;
@@ -111,10 +113,10 @@ export async function POST(request: NextRequest) {
 请按给定段落结构依次成文，段落标题可保留。语言正式、准确、简洁，段落之间衔接自然。`;
     const userPrompt = `【主题】\n${topic.trim()}\n\n【段落结构】\n${structure}\n\n【写作要点】\n${points.trim().slice(0, MAX_INPUT_CHARS)}\n\n【用户补充数据】\n${typeof newData === "string" && newData.trim() ? newData.trim().slice(0, MAX_INPUT_CHARS) : "无"}\n\n【参考材料】\n${referenceText || "无可用参考材料。不得补充未经提供的具体事实。"}`;
 
-    const response = await fetch("https://api.deepseek.com/chat/completions", {
+    const response = await fetch(getChatCompletionsUrl(aiSettings.baseUrl), {
       method: "POST",
       headers: { "Content-Type": "application/json", Authorization: `Bearer ${deepseekKey}` },
-      body: JSON.stringify({ model: process.env.DEEPSEEK_MODEL || "deepseek-chat", messages: [{ role: "system", content: systemPrompt }, { role: "user", content: userPrompt }], temperature: 0.1 }),
+      body: JSON.stringify({ model: aiSettings.model, messages: [{ role: "system", content: systemPrompt }, { role: "user", content: userPrompt }], temperature: 0.1 }),
       signal: AbortSignal.timeout(90_000),
     });
     if (!response.ok) throw new Error(`写作服务不可用（${response.status}）`);
