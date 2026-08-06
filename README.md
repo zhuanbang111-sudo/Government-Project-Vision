@@ -27,7 +27,6 @@ npx.cmd wrangler r2 bucket create government-project-vision-cache
 npm.cmd run cf:d1:migrate:remote
 npx.cmd wrangler secret put DEEPSEEK_API_KEY
 npx.cmd wrangler secret put ZHIPU_API_KEY
-npx.cmd wrangler secret put ACCESS_PASSWORD
 npm.cmd run cf:deploy
 ```
 
