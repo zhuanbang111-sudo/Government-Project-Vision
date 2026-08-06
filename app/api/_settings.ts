@@ -30,7 +30,13 @@ export function validateWritingAiSettings(baseUrl: unknown, model: unknown) {
 }
 
 export async function getWritingAiSettings(db: D1DatabaseLike): Promise<WritingAiSettings> {
-  const { results } = await db.prepare("SELECT setting_key, setting_value FROM app_settings WHERE setting_key IN ('ai_base_url', 'ai_model')").all<SettingRow>();
+  let results: SettingRow[] = [];
+  try {
+    ({ results } = await db.prepare("SELECT setting_key, setting_value FROM app_settings WHERE setting_key IN ('ai_base_url', 'ai_model')").all<SettingRow>());
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "";
+    if (!/no such table|app_settings/i.test(message)) throw error;
+  }
   const values = new Map(results.map((row) => [row.setting_key, row.setting_value]));
   let baseUrl = DEFAULT_AI_BASE_URL;
   try { baseUrl = values.has("ai_base_url") ? normalizeBaseUrl(values.get("ai_base_url")!) : DEFAULT_AI_BASE_URL; } catch { baseUrl = DEFAULT_AI_BASE_URL; }
