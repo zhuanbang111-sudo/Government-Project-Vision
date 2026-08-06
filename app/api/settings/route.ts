@@ -70,6 +70,23 @@ export async function POST(request: NextRequest) {
       if (!response.ok) throw new Error(`AI 服务返回 ${response.status}`);
       return NextResponse.json({ ok: true, message: `AI 服务连接正常（${ai.model}）`, endpoint: getChatCompletionsUrl(ai.baseUrl) });
     }
+    if (action === "test-embedding") {
+      const apiKey = process.env.ZHIPU_API_KEY;
+      if (!apiKey) return NextResponse.json({ ok: false, message: "未检测到 ZHIPU_API_KEY Cloudflare Secret" }, { status: 400 });
+      const response = await fetch("https://open.bigmodel.cn/api/paas/v4/embeddings", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Authorization: `Bearer ${apiKey}` },
+        body: JSON.stringify({ model: "embedding-3", input: "政府公文语料向量化连接测试" }),
+        signal: AbortSignal.timeout(15_000),
+      });
+      const payload: unknown = await response.json();
+      if (!response.ok) throw new Error(`智谱向量服务返回 ${response.status}`);
+      const vector = (payload as { data?: Array<{ embedding?: unknown }> }).data?.[0]?.embedding;
+      if (!Array.isArray(vector) || !vector.every((item) => typeof item === "number")) {
+        throw new Error("智谱向量服务未返回有效向量");
+      }
+      return NextResponse.json({ ok: true, message: `智谱向量服务连接正常（embedding-3，${vector.length} 维）` });
+    }
     return NextResponse.json({ error: "不支持的连接测试类型" }, { status: 400 });
   } catch (error) {
     return NextResponse.json({ ok: false, message: errorMessage(error) }, { status: 502 });
