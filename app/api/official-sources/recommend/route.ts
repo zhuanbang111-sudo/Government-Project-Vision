@@ -41,6 +41,8 @@ async function readLimitedSearchHtml(response: Response) {
 async function searchGovernmentMetadata(query: string) {
   const searchUrl = new URL("https://cn.bing.com/search");
   searchUrl.searchParams.set("q", `${query} site:gov.cn`.slice(0, 180));
+  searchUrl.searchParams.set("cc", "cn");
+  searchUrl.searchParams.set("setlang", "zh-Hans");
   const response = await fetch(searchUrl, {
     headers: { Accept: "text/html", "User-Agent": "Mozilla/5.0 (compatible; GovernmentWritingAssistant/1.0)" },
     signal: AbortSignal.timeout(15_000),
@@ -118,13 +120,15 @@ export async function POST(request: NextRequest) {
         ? [{ section: value.section.slice(0, 120), status: value.status }] : [];
     }) : [];
     const plan = await buildSearchPlan(body.topic.trim(), typeof body.documentType === "string" ? body.documentType : "政府材料", outline, coverage);
-    const settled = await Promise.allSettled(plan.gaps.map((gap) => searchGovernmentMetadata(gap.query)));
+    const broadGap = plan.gaps[0] ?? { section: outline[0] || "全文", query: body.topic.trim(), reason: "补充政府官网公开依据", uses: ["facts", "policy"] };
+    const searchTasks = [...plan.gaps, { ...broadGap, query: body.topic.trim().slice(0, 80), reason: `围绕“${body.topic.trim().slice(0, 40)}”补充政府官网公开依据` }];
+    const settled = await Promise.allSettled(searchTasks.map((gap) => searchGovernmentMetadata(gap.query)));
     const seen = new Set<string>();
-    const candidates = settled.flatMap((result, index) => result.status === "fulfilled" ? result.value.map((item) => ({ ...item, ...plan.gaps[index] })) : [])
+    const candidates = settled.flatMap((result, index) => result.status === "fulfilled" ? result.value.map((item) => ({ ...item, ...searchTasks[index] })) : [])
       .filter((item) => !seen.has(item.url) && Boolean(seen.add(item.url)))
       .slice(0, 6)
       .map((item, index) => ({ id: `official-${index + 1}`, title: item.title, url: item.url, snippet: item.snippet, section: item.section, reason: item.reason, uses: item.uses, sourceType: "政府官网" }));
-    return NextResponse.json({ writingPlan: plan.summary, candidates, metadataOnly: true, warning: candidates.length ? null : "暂未检索到可用政府官网候选，您仍可直接生成，系统不会擅自抓取其他网页。" });
+    return NextResponse.json({ writingPlan: plan.summary, candidates, metadataOnly: true, searchAudit: searchTasks.map((item, index) => ({ query: item.query, resultCount: settled[index].status === "fulfilled" ? settled[index].value.length : 0 })), warning: candidates.length ? null : "暂未检索到可用政府官网候选，您仍可直接生成，系统不会擅自抓取其他网页。" });
   } catch (error) {
     console.error("official source recommendation failed", error);
     return NextResponse.json({ error: error instanceof Error ? error.message : "官方素材推荐失败" }, { status: 500 });
