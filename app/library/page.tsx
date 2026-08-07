@@ -1,6 +1,7 @@
 'use client';
 
 import React, { useState, useEffect } from 'react';
+import { appendDocxFiles, readUploadResponse } from '../upload-client';
 
 interface Document {
   id: string;
@@ -53,16 +54,17 @@ export default function LibraryPage() {
 
     setUploading(true);
     const formData = new FormData();
-    formData.append('file', selectedFile);
     formData.append('department', department);
-    formData.append('classification', classification);
+    formData.append('libraryType', classification);
 
     try {
+      await appendDocxFiles(formData, [selectedFile]);
       const response = await fetch('/api/upload', {
         method: 'POST',
         body: formData,
       });
 
+      await readUploadResponse(response);
       if (response.ok) {
         setSelectedFile(null);
         const fileInput = document.getElementById('file-upload') as HTMLInputElement;
@@ -262,7 +264,7 @@ export default function LibraryPage() {
               <input
                 id="file-upload"
                 type="file"
-                accept=".pdf,.doc,.docx,.xlsx,.txt"
+                accept=".docx"
                 onChange={(e: React.ChangeEvent<HTMLInputElement>) => setSelectedFile(e.target.files?.[0] || null)}
                 className="block w-full text-xs text-slate-500 border border-slate-200 rounded-lg cursor-pointer bg-slate-50 focus:outline-none file:mr-2 file:py-2 file:px-3 file:rounded-l-lg file:border-0 file:text-xs file:font-semibold file:bg-blue-50 file:text-blue-700 hover:file:bg-blue-100"
                 required

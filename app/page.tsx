@@ -3,6 +3,7 @@
 import { ChangeEvent, useEffect, useState } from "react";
 import Link from "next/link";
 import { theme } from "./ui-config";
+import { appendDocxFiles, readUploadResponse } from "./upload-client";
 
 type Stats = { documentCount?: number; generatedCount?: number; docCount?: number; genCount?: number };
 type UploadResult = { successCount: number; failCount: number; details: Array<{ filename: string; status: string; message: string }> };
@@ -29,10 +30,10 @@ export default function HomePage() {
     setUploading(true); setError(null); setResult(null);
     const form = new FormData();
     form.append("libraryType", "语料库");
-    for (const file of files) form.append("files", file);
     try {
+      await appendDocxFiles(form, Array.from(files));
       const response = await fetch("/api/upload", { method: "POST", body: form });
-      const payload = await response.json() as UploadResult & { error?: string };
+      const payload = await readUploadResponse(response);
       if (!response.ok) throw new Error(payload.error || "上传失败");
       setResult(payload); await loadStats();
     } catch (caught: unknown) { setError(caught instanceof Error ? caught.message : "上传失败"); }
