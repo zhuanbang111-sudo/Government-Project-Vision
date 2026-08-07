@@ -113,6 +113,7 @@ export default function GuidedGeneratePage() {
   const [officialLoading, setOfficialLoading] = useState(false);
   const [officialError, setOfficialError] = useState<string | null>(null);
   const [fetchingOfficialUrls, setFetchingOfficialUrls] = useState<string[]>([]);
+  const [manualOfficialUrl, setManualOfficialUrl] = useState("");
 
   // 新增：段落组件库相关状态
   const [dbParagraphTypes, setAllParagraphTypes] = useState<ParagraphType[]>(initialComponents);
@@ -811,6 +812,10 @@ export default function GuidedGeneratePage() {
                 </article>;
               })}
             </div>
+            <div className="flex gap-2 border-t border-slate-100 pt-3">
+              <input type="url" autoComplete="url" placeholder="未找到合适候选时，可粘贴 https://…gov.cn 官方页面" value={manualOfficialUrl} onChange={(event) => setManualOfficialUrl(event.target.value)} className={theme.input} />
+              <button type="button" disabled={!manualOfficialUrl.trim() || fetchingOfficialUrls.includes(manualOfficialUrl.trim())} onClick={() => selectOfficialCandidate({ id: "manual", title: "手动选用的政府官网材料", url: manualOfficialUrl.trim(), snippet: "", section: outlineCoverage.find((item) => item.status !== "covered")?.section || confirmedOutline[0] || "全文", reason: "用户指定的政府官网公开材料", uses: ["facts", "policy"], sourceType: "政府官网" })} className={`${theme.secondaryBtn} shrink-0 disabled:opacity-50`}>校验并选用</button>
+            </div>
             {selectedOfficialSources.length > 0 && <div className="rounded border border-emerald-200 bg-emerald-50/50 p-3 text-[10px] text-emerald-900">
               <p className="font-semibold">已选用 {selectedOfficialSources.length} 个政府官网来源、{selectedOfficialSources.reduce((sum, item) => sum + item.passages.length, 0)} 个命中片段</p>
               <div className="mt-2 space-y-1">{selectedOfficialSources.map((source) => <div key={source.id} className="flex items-center justify-between gap-3"><span className="truncate">{source.publisher}｜{source.title}｜已保存内容哈希</span><button type="button" onClick={() => setSelectedOfficialSources((current) => current.filter((item) => item.id !== source.id))} className="shrink-0 text-red-600 hover:underline">移除</button></div>)}</div>
@@ -947,7 +952,7 @@ export default function GuidedGeneratePage() {
           <div className="border-t pt-6 space-x-3">
             <button onClick={() => { navigator.clipboard.writeText(resultDraft); alert("公文已被成功复制。"); }} className={theme.secondaryBtn}>复制公文最终稿</button>
             <button onClick={handleExportDocx} disabled={exporting} className={theme.primaryBtn}>{exporting ? "正在生成 DOCX…" : "下载公文 DOCX"}</button>
-            <button onClick={() => { setStep(1); setTopic(""); setPoints(""); setNewData(""); setResultDraft(""); setOfficialWritingPlan(""); setOfficialCandidates([]); setSelectedOfficialSources([]); }} className={theme.primaryBtn}>拟写新篇公文</button>
+            <button onClick={() => { setStep(1); setTopic(""); setPoints(""); setNewData(""); setResultDraft(""); setOfficialWritingPlan(""); setOfficialCandidates([]); setSelectedOfficialSources([]); setManualOfficialUrl(""); }} className={theme.primaryBtn}>拟写新篇公文</button>
           </div>
         </div>
       )}

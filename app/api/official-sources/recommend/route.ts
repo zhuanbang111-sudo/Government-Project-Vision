@@ -43,19 +43,30 @@ async function searchGovernmentMetadata(query: string) {
   searchUrl.searchParams.set("q", `${query} site:gov.cn`.slice(0, 180));
   searchUrl.searchParams.set("cc", "cn");
   searchUrl.searchParams.set("setlang", "zh-Hans");
+  searchUrl.searchParams.set("count", "30");
   const response = await fetch(searchUrl, {
     headers: { Accept: "text/html", "User-Agent": "Mozilla/5.0 (compatible; GovernmentWritingAssistant/1.0)" },
     signal: AbortSignal.timeout(15_000),
   });
   if (!response.ok) throw new Error(`官网索引服务返回 ${response.status}`);
   const html = await readLimitedSearchHtml(response);
-  return [...html.matchAll(/<li\s+class=["'][^"']*\bb_algo\b[^"']*["'][^>]*>([\s\S]*?)<\/li>/gi)].flatMap((match): SearchResult[] => {
+  const structured = [...html.matchAll(/<li\s+class=["'][^"']*\bb_algo\b[^"']*["'][^>]*>([\s\S]*?)<\/li>/gi)].flatMap((match): SearchResult[] => {
     const heading = match[1].match(/<h2[^>]*>[\s\S]*?<a[^>]+href=["']([^"']+)["'][^>]*>([\s\S]*?)<\/a>[\s\S]*?<\/h2>/i);
     const title = cleanMarkup(heading?.[2] ?? "");
     const url = cleanMarkup(heading?.[1] ?? "");
     const snippet = cleanMarkup(match[1].match(/<p[^>]*class=["'][^"']*\bb_lineclamp\d*\b[^"']*["'][^>]*>([\s\S]*?)<\/p>/i)?.[1] ?? "");
     return title && isOfficialGovernmentUrl(url) ? [{ title: title.slice(0, 240), url, snippet: snippet.slice(0, 500) }] : [];
-  }).slice(0, 8);
+  });
+  if (structured.length) return structured.slice(0, 8);
+  const fallback = [...html.matchAll(/<a\b[^>]+href=["'](https:\/\/[^"']+)["'][^>]*>([\s\S]*?)<\/a>/gi)].flatMap((match): SearchResult[] => {
+    const url = cleanMarkup(match[1]);
+    const title = cleanMarkup(match[2]);
+    if (!isOfficialGovernmentUrl(url) || title.length < 6) return [];
+    const start = Math.max(0, (match.index ?? 0) - 120);
+    const snippet = cleanMarkup(html.slice(start, Math.min(html.length, (match.index ?? 0) + match[0].length + 500))).slice(0, 500);
+    return [{ title: title.slice(0, 240), url, snippet }];
+  });
+  return [...new Map(fallback.map((item) => [item.url, item])).values()].slice(0, 8);
 }
 
 function fallbackPlan(topic: string, outline: string[], coverage: CoverageItem[]): SearchPlan {
