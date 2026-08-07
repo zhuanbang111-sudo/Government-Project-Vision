@@ -1,9 +1,10 @@
 "use client";
 
-import React, { useState, useRef, useEffect } from "react";
+import React, { useState, useRef } from "react";
 import Link from "next/link";
 import { theme } from "../ui-config";
 import { documentTypeLabel, safeParseList, usageTagLabel } from "../knowledge";
+import { getDocumentTemplate, ordinaryDocumentTypes, templateComponentsForClient, type ComponentRequirement } from "../document-templates";
 import type { WritingAnalysis, WritingTask } from "../../types/writing";
 
 interface DocReference {
@@ -19,9 +20,16 @@ interface DocReference {
 
 interface ParagraphType {
   id: number;
+  key?: string;
   name: string;
   description: string;
+  requirement?: ComponentRequirement;
+  defaultSelected?: boolean;
+  retrievalUses?: string[];
 }
+
+const initialTemplate = getDocumentTemplate("工作报告");
+const initialComponents = templateComponentsForClient(initialTemplate);
 
 interface ReviewIssue {
   dimension: "职能职责" | "数据准确性" | "工作来源" | "事件合理性";
@@ -34,7 +42,7 @@ export default function GuidedGeneratePage() {
 
   // 向导内部表单状态
   const [topic, setTopic] = useState("");
-  const [task, setTask] = useState<WritingTask>({ title: "", documentType: "工作报告", department: "", audience: "", purpose: "", timeRange: "", focus: "" });
+  const [task, setTask] = useState<WritingTask>({ title: "", documentType: "工作报告", documentSubtype: "", department: "", audience: "", purpose: "", timeRange: "", focus: "" });
   const [analysis, setAnalysis] = useState<WritingAnalysis | null>(null);
   const [confirmedOutline, setConfirmedOutline] = useState<string[]>([]);
   const [recommendedDocs, setRecommendedDocs] = useState<DocReference[]>([]);
@@ -44,8 +52,9 @@ export default function GuidedGeneratePage() {
   const [resultDraft, setResultDraft] = useState("");
 
   // 新增：段落组件库相关状态
-  const [dbParagraphTypes, setAllParagraphTypes] = useState<ParagraphType[]>([]);
-  const [selectedParagraphs, setSelectedParagraphs] = useState<ParagraphType[]>([]);
+  const [dbParagraphTypes, setAllParagraphTypes] = useState<ParagraphType[]>(initialComponents);
+  const [selectedParagraphs, setSelectedParagraphs] = useState<ParagraphType[]>(initialComponents.filter((item) => item.defaultSelected));
+  const [templateTouched, setTemplateTouched] = useState(false);
 
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -59,21 +68,6 @@ export default function GuidedGeneratePage() {
   const [reviewError, setReviewError] = useState<string | null>(null);
   const [exporting, setExporting] = useState(false);
 
-  // 挂载时拉取段落组件库类型
-  useEffect(() => {
-    fetch("/api/paragraph-types")
-      .then(async (res) => ({ ok: res.ok, data: await res.json() as unknown }))
-      .then(({ ok, data }) => {
-        if (!ok || !Array.isArray(data)) throw new Error("段落类型加载失败");
-        setAllParagraphTypes(data);
-        // 默认将前4个常用段落预先勾选上，提供顺滑初体验
-        if (data.length > 0) {
-          setSelectedParagraphs(data.slice(0, 4));
-        }
-      })
-      .catch(() => {});
-  }, []);
-
   // 推荐公文检索
   const triggerSemanticRecommendation = async (keyword: string) => {
     try {
@@ -82,7 +76,7 @@ export default function GuidedGeneratePage() {
       const res = await fetch("/api/search", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ query: keyword, documentType: task.documentType }),
+        body: JSON.stringify({ query: `${keyword} ${task.documentSubtype}`.trim(), documentType: task.documentType }),
       });
       const data: unknown = await res.json();
       if (!res.ok || !Array.isArray(data)) throw new Error((data as { error?: string })?.error || "检索发生故障");
@@ -101,9 +95,16 @@ export default function GuidedGeneratePage() {
     if (!task.title.trim() || !task.department.trim() || !task.purpose.trim() || selectedParagraphs.length === 0) return;
     setLoading(true);
     setError(null);
-    let recommendationQuery = `${task.documentType} ${task.title} ${task.department}`;
+    let recommendationQuery = `${task.documentType} ${task.documentSubtype} ${task.title} ${task.department}`;
     try {
-      const response = await fetch("/api/writing-analysis", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(task) });
+      const response = await fetch("/api/writing-analysis", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          ...task,
+          selectedComponents: selectedParagraphs.map(({ name, description }) => ({ name, description })),
+        }),
+      });
       const data = await response.json();
       if (!response.ok) throw new Error(data.error || "任务分析失败");
       setAnalysis(data as WritingAnalysis);
@@ -139,6 +140,28 @@ export default function GuidedGeneratePage() {
     await triggerSemanticRecommendation(manualKeyword);
   };
 
+  const applyDocumentTemplate = (documentType: WritingTask["documentType"], documentSubtype = "") => {
+    const template = getDocumentTemplate(documentType, documentSubtype);
+    const components = templateComponentsForClient(template);
+    setAllParagraphTypes(components);
+    setSelectedParagraphs(components.filter((item) => item.defaultSelected));
+    setTemplateTouched(false);
+  };
+
+  const handleDocumentTypeChange = (documentType: WritingTask["documentType"]) => {
+    if (templateTouched && !window.confirm("切换文种将重新加载该文种的推荐段落组件，是否继续？")) return;
+    const template = getDocumentTemplate(documentType);
+    const documentSubtype = template.subtypes?.[0] ?? "";
+    setTask((current) => ({ ...current, documentType, documentSubtype }));
+    applyDocumentTemplate(documentType, documentSubtype);
+  };
+
+  const handleDocumentSubtypeChange = (documentSubtype: string) => {
+    if (templateTouched && !window.confirm("切换二级类型将重新加载推荐段落组件，是否继续？")) return;
+    setTask((current) => ({ ...current, documentSubtype }));
+    applyDocumentTemplate(task.documentType, documentSubtype);
+  };
+
   const handleStep3Submit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!points.trim()) return;
@@ -154,6 +177,7 @@ export default function GuidedGeneratePage() {
       // 提交到 v3 接口：分段处理 + 整体润色
       const contextualPoints = [
         `文种：${task.documentType}`,
+        task.documentSubtype ? `具体类型：${task.documentSubtype}` : "",
         `牵头部门：${task.department}`,
         task.audience ? `报送对象：${task.audience}` : "",
         `写作目的：${task.purpose}`,
@@ -172,6 +196,7 @@ export default function GuidedGeneratePage() {
           newData,
           selectedIds,
           documentType: task.documentType,
+          documentSubtype: task.documentSubtype,
           knowledgeRequirements: analysis?.knowledgeRequirement ?? [],
         }),
       });
@@ -187,6 +212,8 @@ export default function GuidedGeneratePage() {
 
   // 控制组件单项复选勾选
   const handleToggleParagraphSelection = (p: ParagraphType) => {
+    if (p.requirement === "required") return;
+    setTemplateTouched(true);
     setSelectedParagraphs((prev) =>
       prev.some((item) => item.id === p.id)
         ? prev.filter((item) => item.id !== p.id)
@@ -196,6 +223,7 @@ export default function GuidedGeneratePage() {
 
   // 通过 index 互相交换，实现极简且零依赖的节点上下移动排序
   const moveParagraphOrder = (index: number, direction: "up" | "down") => {
+    setTemplateTouched(true);
     const newList = [...selectedParagraphs];
     if (direction === "up" && index > 0) {
       [newList[index], newList[index - 1]] = [newList[index - 1], newList[index]];
@@ -286,6 +314,7 @@ export default function GuidedGeneratePage() {
 
   const { body, sources } = parseResultDraft();
   const missingDataCount = (body.match(/【此处需补充具体数据】/g) || []).length;
+  const activeTemplate = getDocumentTemplate(task.documentType, task.documentSubtype);
 
   const stepsDef = [
     { num: 1, name: "指定主题" },
@@ -345,14 +374,20 @@ export default function GuidedGeneratePage() {
 
           <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
             <input required autoComplete="off" placeholder="材料标题" value={task.title} onChange={(e) => { setTask((current) => ({ ...current, title: e.target.value })); setTopic(e.target.value); }} className={theme.input} />
-            <select value={task.documentType} onChange={(e) => setTask((current) => ({ ...current, documentType: e.target.value as WritingTask["documentType"] }))} className={theme.input}>
-              {(["工作报告", "情况汇报", "实施方案", "调研报告", "领导讲话稿"] as const).map((type) => <option key={type}>{type}</option>)}
+            <select aria-label="材料文种" value={task.documentType} onChange={(e) => handleDocumentTypeChange(e.target.value as WritingTask["documentType"])} className={theme.input}>
+              {ordinaryDocumentTypes.map((type) => <option key={type}>{type}</option>)}
             </select>
+            {activeTemplate.subtypes?.length ? <select aria-label="材料二级类型" value={task.documentSubtype} onChange={(e) => handleDocumentSubtypeChange(e.target.value)} className={theme.input}>
+              {activeTemplate.subtypes.map((subtype) => <option key={subtype}>{subtype}</option>)}
+            </select> : null}
             <input required autoComplete="organization" placeholder="牵头部门" value={task.department} onChange={(e) => setTask((current) => ({ ...current, department: e.target.value }))} className={theme.input} />
             <input autoComplete="off" placeholder="报送对象" value={task.audience} onChange={(e) => setTask((current) => ({ ...current, audience: e.target.value }))} className={theme.input} />
             <input required autoComplete="off" placeholder="写作目的" value={task.purpose} onChange={(e) => setTask((current) => ({ ...current, purpose: e.target.value }))} className={theme.input} />
             <input autoComplete="off" placeholder="时间范围" value={task.timeRange} onChange={(e) => setTask((current) => ({ ...current, timeRange: e.target.value }))} className={theme.input} />
             <input autoComplete="off" placeholder="重点关注事项" value={task.focus} onChange={(e) => setTask((current) => ({ ...current, focus: e.target.value }))} className={theme.input} />
+          </div>
+          <div className="rounded border border-teal-100 bg-teal-50/40 px-3 py-2 text-xs text-teal-900">
+            <span className="font-bold">{task.documentSubtype || task.documentType}</span>：{activeTemplate.description}。推荐逻辑为“{activeTemplate.logic}”，切换文种会同步更新下方组件。
           </div>
 
           <div className="grid grid-cols-1 md:grid-cols-2 gap-5 pt-2">
@@ -363,10 +398,10 @@ export default function GuidedGeneratePage() {
                 {dbParagraphTypes.map((p) => {
                   const isChecked = selectedParagraphs.some((item) => item.id === p.id);
                   return (
-                    <label key={p.id} className="flex items-start space-x-2 text-xs p-2 bg-white rounded border hover:bg-slate-50 cursor-pointer">
-                      <input type="checkbox" checked={isChecked} onChange={() => handleToggleParagraphSelection(p)} className="mt-0.5" />
+                    <label key={p.key ?? p.id} className={`flex items-start space-x-2 text-xs p-2 bg-white rounded border hover:bg-slate-50 ${p.requirement === "required" ? "cursor-not-allowed" : "cursor-pointer"}`}>
+                      <input type="checkbox" checked={isChecked} disabled={p.requirement === "required"} onChange={() => handleToggleParagraphSelection(p)} className="mt-0.5" />
                       <div>
-                        <p className="font-bold text-slate-800">{p.name}</p>
+                        <p className="flex items-center gap-2 font-bold text-slate-800">{p.name}<span className={`rounded px-1.5 py-0.5 text-[9px] ${p.requirement === "required" ? "bg-red-50 text-red-600" : p.requirement === "optional" ? "bg-slate-100 text-slate-500" : "bg-blue-50 text-blue-600"}`}>{p.requirement === "required" ? "必选" : p.requirement === "optional" ? "可选" : "推荐"}</span></p>
                         <p className="text-[10px] text-slate-400 mt-0.5">{p.description}</p>
                       </div>
                     </label>

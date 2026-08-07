@@ -10,7 +10,7 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: "搜索词不能为空" }, { status: 400 });
     }
     const preferredType = typeof body.documentType === "string"
-      ? writingTypeToKnowledgeType(body.documentType) ?? normalizeDocumentType(body.documentType)
+      ? writingTypeToKnowledgeType(body.documentType) ?? (/^[a-z_]+$/.test(body.documentType) ? normalizeDocumentType(body.documentType) : null)
       : null;
     const db = await getDatabase();
     const { results: documents } = await db.prepare(

@@ -1,8 +1,11 @@
-export type DocumentType = "工作报告" | "情况汇报" | "实施方案" | "调研报告" | "领导讲话稿";
+import type { OrdinaryDocumentType } from "../app/document-templates";
+
+export type DocumentType = OrdinaryDocumentType;
 
 export interface WritingTask {
   title: string;
   documentType: DocumentType;
+  documentSubtype: string;
   department: string;
   audience: string;
   purpose: string;

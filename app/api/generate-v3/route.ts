@@ -21,13 +21,14 @@ function extractDocument(text: string) {
 export async function POST(request: NextRequest) {
   try {
     const body: unknown = await request.json();
-    const { topic, selectedParagraphs, points, newData = "", selectedIds, documentType = "", knowledgeRequirements = [] } = body as {
+    const { topic, selectedParagraphs, points, newData = "", selectedIds, documentType = "", documentSubtype = "", knowledgeRequirements = [] } = body as {
       topic?: unknown;
       selectedParagraphs?: unknown;
       points?: unknown;
       newData?: unknown;
       selectedIds?: unknown;
       documentType?: unknown;
+      documentSubtype?: unknown;
       knowledgeRequirements?: unknown;
     };
     if (typeof topic !== "string" || !topic.trim() || typeof points !== "string" || !points.trim() || !Array.isArray(selectedParagraphs) || !selectedParagraphs.length) {
@@ -59,7 +60,7 @@ export async function POST(request: NextRequest) {
         : []
       : (await db.prepare(`${selectSql} ORDER BY verification_status DESC, created_at DESC LIMIT 500`).all<RetrievalDocument>()).results;
 
-    const retrievalQuery = `${topic}\n${documentType}\n${points}\n${requiredUses.join(" ")}`.slice(0, MAX_INPUT_CHARS);
+    const retrievalQuery = `${topic}\n${documentType}\n${documentSubtype}\n${points}\n${requiredUses.join(" ")}`.slice(0, MAX_INPUT_CHARS);
     const ranked = await rankReferenceDocuments({
       documents,
       query: retrievalQuery,
@@ -89,7 +90,7 @@ export async function POST(request: NextRequest) {
 5. 只能模仿参考材料的结构和正式措辞，不得复制与当前主题无关的事实，不得虚构来源。
 6. 已核验来源优先作为事实和政策依据；未核验来源只能作为待核查参考。
 语言应正式、准确、简洁，层级编号规范，段落衔接自然。`;
-    const userPrompt = `【材料主题】\n${topic.trim()}\n\n【目标文种】\n${typeof documentType === "string" ? documentType : "政府材料"}\n\n【已确认完整提纲】\n${structure}\n\n【写作要点】\n${points.trim().slice(0, MAX_INPUT_CHARS)}\n\n【用户补充数据】\n${typeof newData === "string" && newData.trim() ? newData.trim().slice(0, MAX_INPUT_CHARS) : "无"}\n\n【本次所需知识】\n${requiredUses.join("、") || "结构、措辞、事实和政策依据"}\n\n【参考材料】\n${referenceText || "无可用参考材料。不得补充未经提供的具体事实。"}`;
+    const userPrompt = `【材料主题】\n${topic.trim()}\n\n【目标文种】\n${typeof documentType === "string" ? documentType : "政府材料"}${typeof documentSubtype === "string" && documentSubtype ? `（${documentSubtype}）` : ""}\n\n【已确认完整提纲】\n${structure}\n\n【写作要点】\n${points.trim().slice(0, MAX_INPUT_CHARS)}\n\n【用户补充数据】\n${typeof newData === "string" && newData.trim() ? newData.trim().slice(0, MAX_INPUT_CHARS) : "无"}\n\n【本次所需知识】\n${requiredUses.join("、") || "结构、措辞、事实和政策依据"}\n\n【参考材料】\n${referenceText || "无可用参考材料。不得补充未经提供的具体事实。"}`;
 
     const response = await fetch(getChatCompletionsUrl(aiSettings.baseUrl), {
       method: "POST",
