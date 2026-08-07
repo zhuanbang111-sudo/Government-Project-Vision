@@ -6,6 +6,7 @@ import { isOfficialGovernmentUrl, stripHtml } from "../../_official-sources";
 type CoverageItem = { section: string; status: "covered" | "weak" | "missing" };
 type SearchPlan = { summary: string; gaps: Array<{ section: string; query: string; reason: string; uses: string[] }> };
 type SearchResult = { title: string; url: string; snippet: string };
+const MAX_SEARCH_RESPONSE_BYTES = 600_000;
 
 function extractJson(text: string) {
   const cleaned = text.replace(/^```(?:json)?\s*|\s*```$/gi, "").trim();
@@ -13,28 +14,44 @@ function extractJson(text: string) {
   return JSON.parse(match?.[0] ?? cleaned) as unknown;
 }
 
-function cleanXml(value: string) {
+function cleanMarkup(value: string) {
   return stripHtml(value.replace(/<!\[CDATA\[([\s\S]*?)\]\]>/g, "$1"));
 }
 
-function tagValue(item: string, tag: string) {
-  return cleanXml(item.match(new RegExp(`<${tag}[^>]*>([\\s\\S]*?)<\\/${tag}>`, "i"))?.[1] ?? "");
+async function readLimitedSearchHtml(response: Response) {
+  const declared = Number(response.headers.get("content-length") || 0);
+  if (declared > MAX_SEARCH_RESPONSE_BYTES) throw new Error("官网索引响应过大");
+  if (!response.body) return "";
+  const reader = response.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let total = 0;
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    total += value.byteLength;
+    if (total > MAX_SEARCH_RESPONSE_BYTES) { await reader.cancel(); throw new Error("官网索引响应过大"); }
+    chunks.push(value);
+  }
+  const bytes = new Uint8Array(total);
+  let offset = 0;
+  for (const chunk of chunks) { bytes.set(chunk, offset); offset += chunk.byteLength; }
+  return new TextDecoder("utf-8").decode(bytes);
 }
 
 async function searchGovernmentMetadata(query: string) {
-  const searchUrl = new URL("https://www.bing.com/search");
-  searchUrl.searchParams.set("format", "rss");
-  searchUrl.searchParams.set("q", `site:gov.cn ${query}`.slice(0, 180));
+  const searchUrl = new URL("https://cn.bing.com/search");
+  searchUrl.searchParams.set("q", `${query} site:gov.cn`.slice(0, 180));
   const response = await fetch(searchUrl, {
-    headers: { Accept: "application/rss+xml, application/xml, text/xml" },
+    headers: { Accept: "text/html", "User-Agent": "Mozilla/5.0 (compatible; GovernmentWritingAssistant/1.0)" },
     signal: AbortSignal.timeout(15_000),
   });
   if (!response.ok) throw new Error(`官网索引服务返回 ${response.status}`);
-  const xml = await response.text();
-  return [...xml.matchAll(/<item>([\s\S]*?)<\/item>/gi)].flatMap((match): SearchResult[] => {
-    const title = tagValue(match[1], "title");
-    const url = tagValue(match[1], "link");
-    const snippet = tagValue(match[1], "description");
+  const html = await readLimitedSearchHtml(response);
+  return [...html.matchAll(/<li\s+class=["'][^"']*\bb_algo\b[^"']*["'][^>]*>([\s\S]*?)<\/li>/gi)].flatMap((match): SearchResult[] => {
+    const heading = match[1].match(/<h2[^>]*>[\s\S]*?<a[^>]+href=["']([^"']+)["'][^>]*>([\s\S]*?)<\/a>[\s\S]*?<\/h2>/i);
+    const title = cleanMarkup(heading?.[2] ?? "");
+    const url = cleanMarkup(heading?.[1] ?? "");
+    const snippet = cleanMarkup(match[1].match(/<p[^>]*class=["'][^"']*\bb_lineclamp\d*\b[^"']*["'][^>]*>([\s\S]*?)<\/p>/i)?.[1] ?? "");
     return title && isOfficialGovernmentUrl(url) ? [{ title: title.slice(0, 240), url, snippet: snippet.slice(0, 500) }] : [];
   }).slice(0, 8);
 }
