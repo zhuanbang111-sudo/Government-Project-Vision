@@ -1,11 +1,11 @@
 import { NextRequest, NextResponse } from "next/server";
 import { normalizeDocumentType, writingTypeToKnowledgeType } from "../../knowledge";
 import { getDatabase } from "../_platform";
-import { rankReferenceDocuments, type RetrievalDocument } from "../_retrieval";
+import { rankPassagesByOutline, rankReferenceDocuments, type RetrievalDocument } from "../_retrieval";
 
 export async function POST(request: NextRequest) {
   try {
-    const body = await request.json().catch(() => null) as { query?: unknown; documentType?: unknown } | null;
+    const body = await request.json().catch(() => null) as { query?: unknown; documentType?: unknown; outline?: unknown } | null;
     if (typeof body?.query !== "string" || !body.query.trim()) {
       return NextResponse.json({ error: "搜索词不能为空" }, { status: 400 });
     }
@@ -22,8 +22,39 @@ export async function POST(request: NextRequest) {
       query: body.query.trim(),
       apiKey: process.env.ZHIPU_API_KEY,
       preferredType,
-      limit: 8,
+      limit: Array.isArray(body.outline) ? 14 : 8,
     });
+    const outline = Array.isArray(body.outline)
+      ? body.outline.filter((item): item is string => typeof item === "string" && Boolean(item.trim())).map((item) => item.trim().slice(0, 120)).slice(0, 15)
+      : [];
+    if (outline.length) {
+      const sections = rankPassagesByOutline({ documents: ranked.results, topic: body.query.trim(), outline });
+      const passagesByDocument = new Map<number, typeof sections[number]["matches"]>();
+      for (const section of sections) {
+        for (const match of section.matches) {
+          const existing = passagesByDocument.get(match.documentId) ?? [];
+          existing.push(match);
+          passagesByDocument.set(match.documentId, existing);
+        }
+      }
+      const responseDocuments = ranked.results.flatMap((item) => {
+        const passages = passagesByDocument.get(item.id) ?? [];
+        if (!passages.length) return [];
+        return [{
+          id: item.id,
+          filename: item.filename,
+          department: item.department ?? "未分类",
+          documentType: item.document_type,
+          usageTags: item.usage_tags,
+          verificationStatus: item.verification_status,
+          score: Math.max(item.score, ...passages.map((passage) => passage.score)),
+          matchReasons: [...new Set(passages.flatMap((passage) => passage.matchReasons))].slice(0, 5),
+          coveredSections: [...new Set(passages.map((passage) => passage.section))],
+          passages,
+        }];
+      });
+      return NextResponse.json({ documents: responseDocuments, sections, mode: ranked.mode }, { headers: { "X-Search-Mode": ranked.mode } });
+    }
     return NextResponse.json(ranked.results.map((item) => ({
       id: item.id,
       filename: item.filename,

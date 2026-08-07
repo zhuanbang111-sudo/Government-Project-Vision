@@ -3,7 +3,7 @@
 import React, { useState, useRef } from "react";
 import Link from "next/link";
 import { theme } from "../ui-config";
-import { documentTypeLabel, safeParseList, usageTagLabel } from "../knowledge";
+import { documentTypeLabel, normalizeUsageTags, usageTagOptions, type KnowledgeUsageTag } from "../knowledge";
 import { getDocumentTemplate, ordinaryDocumentTypes, templateComponentsForClient, type ComponentRequirement } from "../document-templates";
 import type { WritingAnalysis, WritingTask } from "../../types/writing";
 
@@ -16,6 +16,37 @@ interface DocReference {
   verificationStatus: string;
   matchReasons: string[];
   score: number;
+  coveredSections: string[];
+  passages: PassageRecommendation[];
+}
+
+interface PassageRecommendation {
+  documentId: number;
+  passageId: string;
+  passageIndex: number;
+  section: string;
+  text: string;
+  score: number;
+  matchReasons: string[];
+}
+
+interface OutlineCoverageItem {
+  section: string;
+  status: "covered" | "weak" | "missing";
+  matches: PassageRecommendation[];
+}
+
+interface OutlineSearchResponse {
+  documents: DocReference[];
+  sections: OutlineCoverageItem[];
+  mode: "hybrid" | "lexical";
+}
+
+interface SelectedPassage {
+  passageId: string;
+  documentId: number;
+  passageIndex: number;
+  section: string;
 }
 
 interface ParagraphType {
@@ -46,7 +77,11 @@ export default function GuidedGeneratePage() {
   const [analysis, setAnalysis] = useState<WritingAnalysis | null>(null);
   const [confirmedOutline, setConfirmedOutline] = useState<string[]>([]);
   const [recommendedDocs, setRecommendedDocs] = useState<DocReference[]>([]);
-  const [selectedIds, setSelectedIds] = useState<number[]>([]);
+  const [outlineCoverage, setOutlineCoverage] = useState<OutlineCoverageItem[]>([]);
+  const [retrievedOutline, setRetrievedOutline] = useState<string[]>([]);
+  const [selectedPassages, setSelectedPassages] = useState<SelectedPassage[]>([]);
+  const [documentUses, setDocumentUses] = useState<Record<number, KnowledgeUsageTag[]>>({});
+  const [expandedDocumentIds, setExpandedDocumentIds] = useState<number[]>([]);
   const [points, setPoints] = useState("");
   const [newData, setNewData] = useState("");
   const [resultDraft, setResultDraft] = useState("");
@@ -69,20 +104,34 @@ export default function GuidedGeneratePage() {
   const [exporting, setExporting] = useState(false);
 
   // 推荐公文检索
-  const triggerSemanticRecommendation = async (keyword: string) => {
+  const selectedIds = [...new Set(selectedPassages.map((item) => item.documentId))];
+
+  const defaultDocumentUses = (doc: DocReference) => {
+    const available = normalizeUsageTags(doc.usageTags);
+    const required = analysis?.knowledgeRequirement ?? [];
+    const preferred = available.filter((item) => required.includes(item));
+    return (preferred.length ? preferred : available.length ? available : ["structure", "wording"]).slice(0, 4) as KnowledgeUsageTag[];
+  };
+
+  // 按当前主题和每个提纲章节检索，再以文件为入口展示命中段落。
+  const triggerSemanticRecommendation = async (keyword: string, outline = confirmedOutline) => {
     try {
       setLoading(true);
       setError(null);
       const res = await fetch("/api/search", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ query: `${keyword} ${task.documentSubtype}`.trim(), documentType: task.documentType }),
+        body: JSON.stringify({ query: `${keyword} ${task.documentSubtype}`.trim(), documentType: task.documentType, outline }),
       });
       const data: unknown = await res.json();
-      if (!res.ok || !Array.isArray(data)) throw new Error((data as { error?: string })?.error || "检索发生故障");
-      setRecommendedDocs(data);
-      const autoChecked = data.slice(0, 4).map((item: DocReference) => item.id);
-      setSelectedIds(autoChecked);
+      const result = data as Partial<OutlineSearchResponse> & { error?: string };
+      if (!res.ok || !Array.isArray(result.documents) || !Array.isArray(result.sections)) throw new Error(result.error || "检索发生故障");
+      setRecommendedDocs(result.documents);
+      setOutlineCoverage(result.sections);
+      setRetrievedOutline([...outline]);
+      setSelectedPassages([]);
+      setDocumentUses({});
+      setExpandedDocumentIds(result.documents.slice(0, 2).map((item) => item.id));
     } catch (err: unknown) {
       setError(err instanceof Error ? err.message : "请求失败");
     } finally {
@@ -96,6 +145,7 @@ export default function GuidedGeneratePage() {
     setLoading(true);
     setError(null);
     let recommendationQuery = `${task.documentType} ${task.documentSubtype} ${task.title} ${task.department}`;
+    let recommendationOutline = selectedParagraphs.map((item) => item.name);
     try {
       const response = await fetch("/api/writing-analysis", {
         method: "POST",
@@ -108,7 +158,9 @@ export default function GuidedGeneratePage() {
       const data = await response.json();
       if (!response.ok) throw new Error(data.error || "任务分析失败");
       setAnalysis(data as WritingAnalysis);
-      setConfirmedOutline((data as WritingAnalysis).recommendedStructure);
+      const recommendedOutline = (data as WritingAnalysis).recommendedStructure;
+      recommendationOutline = recommendedOutline;
+      setConfirmedOutline(recommendedOutline);
       recommendationQuery = `${recommendationQuery} ${(data as WritingAnalysis).keywords.join(" ")}`;
       setTopic(task.title);
       setStep(2);
@@ -117,11 +169,51 @@ export default function GuidedGeneratePage() {
       return;
     } finally { setLoading(false); }
     // 使用第一个勾选的段落和主题进行首轮语意检索推荐
-    await triggerSemanticRecommendation(recommendationQuery);
+    await triggerSemanticRecommendation(recommendationQuery, recommendationOutline);
   };
 
-  const handleToggleDoc = (id: number) => {
-    setSelectedIds((prev) => prev.includes(id) ? prev.filter((item) => item !== id) : [...prev, id]);
+  const togglePassage = (doc: DocReference, passage: PassageRecommendation) => {
+    setSelectedPassages((current) => {
+      if (current.some((item) => item.passageId === passage.passageId)) return current.filter((item) => item.passageId !== passage.passageId);
+      if (current.length >= 24) { setError("单次最多选择 24 个引用片段，请先取消部分片段"); return current; }
+      return [...current, { passageId: passage.passageId, documentId: doc.id, passageIndex: passage.passageIndex, section: passage.section }];
+    });
+    setDocumentUses((current) => current[doc.id] ? current : { ...current, [doc.id]: defaultDocumentUses(doc) });
+  };
+
+  const toggleDocumentPassages = (doc: DocReference) => {
+    const passageIds = new Set(doc.passages.map((item) => item.passageId));
+    const allSelected = doc.passages.length > 0 && doc.passages.every((item) => selectedPassages.some((selected) => selected.passageId === item.passageId));
+    setSelectedPassages((current) => {
+      if (allSelected) return current.filter((item) => !passageIds.has(item.passageId));
+      const existingIds = new Set(current.map((item) => item.passageId));
+      const additions = doc.passages.filter((item) => !existingIds.has(item.passageId)).map((item) => ({ passageId: item.passageId, documentId: doc.id, passageIndex: item.passageIndex, section: item.section }));
+      return [...current, ...additions].slice(0, 24);
+    });
+    setDocumentUses((current) => current[doc.id] ? current : { ...current, [doc.id]: defaultDocumentUses(doc) });
+  };
+
+  const toggleDocumentUse = (doc: DocReference, use: KnowledgeUsageTag) => {
+    setDocumentUses((current) => {
+      const values = current[doc.id] ?? defaultDocumentUses(doc);
+      if (values.length === 1 && values.includes(use)) { setError("每份已选文件至少保留一种参考用途"); return current; }
+      const next = values.includes(use) ? values.filter((item) => item !== use) : [...values, use];
+      return { ...current, [doc.id]: next };
+    });
+  };
+
+  const applyRecommendedBundle = () => {
+    const recommended = outlineCoverage.flatMap((section) => section.matches.slice(0, 1));
+    const unique = [...new Map(recommended.map((item) => [item.passageId, item])).values()].slice(0, 24);
+    setSelectedPassages(unique.map((item) => ({ passageId: item.passageId, documentId: item.documentId, passageIndex: item.passageIndex, section: item.section })));
+    setDocumentUses((current) => {
+      const next = { ...current };
+      for (const passage of unique) {
+        const doc = recommendedDocs.find((item) => item.id === passage.documentId);
+        if (doc && !next[doc.id]) next[doc.id] = defaultDocumentUses(doc);
+      }
+      return next;
+    });
   };
 
   const moveOutline = (index: number, direction: "up" | "down") => {
@@ -137,6 +229,7 @@ export default function GuidedGeneratePage() {
   const handleManualSearch = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!manualKeyword.trim()) return;
+    if (selectedPassages.length && !window.confirm("重新检索将清空当前已选引用片段，是否继续？")) return;
     await triggerSemanticRecommendation(manualKeyword);
   };
 
@@ -195,6 +288,12 @@ export default function GuidedGeneratePage() {
           points: contextualPoints,
           newData,
           selectedIds,
+          selectedReferences: selectedPassages.map((item) => ({
+            documentId: item.documentId,
+            passageIndex: item.passageIndex,
+            section: item.section,
+            uses: documentUses[item.documentId] ?? [],
+          })),
           documentType: task.documentType,
           documentSubtype: task.documentSubtype,
           knowledgeRequirements: analysis?.knowledgeRequirement ?? [],
@@ -241,7 +340,11 @@ export default function GuidedGeneratePage() {
       const res = await fetch("/api/review", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ draftContent: resultDraft, selectedIds }),
+        body: JSON.stringify({
+          draftContent: resultDraft,
+          selectedIds,
+          selectedReferences: selectedPassages.map((item) => ({ documentId: item.documentId, passageIndex: item.passageIndex })),
+        }),
       });
       const data: unknown = await res.json();
       if (!res.ok || !Array.isArray(data)) throw new Error((data as { error?: string })?.error || "审查处理故障");
@@ -315,10 +418,13 @@ export default function GuidedGeneratePage() {
   const { body, sources } = parseResultDraft();
   const missingDataCount = (body.match(/【此处需补充具体数据】/g) || []).length;
   const activeTemplate = getDocumentTemplate(task.documentType, task.documentSubtype);
+  const selectedCoverageCount = new Set(selectedPassages.map((item) => item.section)).size;
+  const availableCoverageCount = outlineCoverage.filter((item) => item.status !== "missing").length;
+  const retrievalIsStale = retrievedOutline.length > 0 && JSON.stringify(retrievedOutline) !== JSON.stringify(confirmedOutline);
 
   const stepsDef = [
     { num: 1, name: "指定主题" },
-    { num: 2, name: "语料勾选" },
+    { num: 2, name: "语料配置" },
     { num: 3, name: "写作要点" },
     { num: 4, name: "AI草稿" },
     { num: 5, name: "合规审查" },
@@ -326,7 +432,7 @@ export default function GuidedGeneratePage() {
   ];
 
   return (
-    <div className={`mx-auto bg-white p-6 sm:p-8 rounded border border-slate-200 shadow-sm transition-all ${step === 5 ? "max-w-6xl" : "max-w-3xl"}`}>
+    <div className={`mx-auto bg-white p-6 sm:p-8 rounded border border-slate-200 shadow-sm transition-all ${step === 5 ? "max-w-6xl" : step === 2 ? "max-w-5xl" : "max-w-3xl"}`}>
       
       {/* 顶部指示器 */}
       <div className="border-b border-slate-100 pb-6 mb-6">
@@ -361,6 +467,8 @@ export default function GuidedGeneratePage() {
           })}
         </div>
       </div>
+
+      {error && step !== 4 && <div role="alert" className="mb-5 flex items-start justify-between gap-3 rounded border border-red-200 bg-red-50 px-4 py-3 text-xs text-red-700"><span>{error}</span><button type="button" onClick={() => setError(null)} className="font-semibold">关闭</button></div>}
 
       {/* 第1步：多段落多选与 Up/Down 上下移动排序器 */}
       {step === 1 && (
@@ -447,7 +555,7 @@ export default function GuidedGeneratePage() {
 
           <div className="text-right border-t pt-4">
             <button type="submit" disabled={selectedParagraphs.length === 0} className={theme.primaryBtn}>
-              下一步：推荐公文勾选
+              下一步：按提纲匹配语料
             </button>
           </div>
         </form>
@@ -456,20 +564,34 @@ export default function GuidedGeneratePage() {
       {/* 第2步 */}
       {step === 2 && (
         <div className="space-y-6">
-          {analysis && (
-            <section className="rounded border border-teal-100 bg-teal-50/40 p-4 text-xs text-slate-700">
-              <h3 className="mb-2 font-bold text-teal-900">AI 任务分析</h3>
-              <p className="mb-2">{analysis.documentPurpose}</p>
-              <div className="grid gap-3 md:grid-cols-2">
-                <div><p className="font-semibold">推荐结构</p><ol className="list-decimal pl-4">{analysis.recommendedStructure.map((item) => <li key={item}>{item}</li>)}</ol></div>
-                <div><p className="font-semibold">检索关键词</p><p>{analysis.keywords.join("、") || "未提供"}</p><p className="mt-2 font-semibold">风险提示</p><p>{analysis.riskPoints.join("；") || "无"}</p></div>
+          <section className="rounded border border-slate-200 bg-slate-50/60 p-4 text-xs text-slate-700">
+            <div className="flex flex-wrap items-start justify-between gap-3">
+              <div>
+                <p className="text-[10px] font-bold uppercase tracking-wider text-teal-700">当前写作任务</p>
+                <h3 className="mt-1 text-base font-bold text-slate-900">{task.title}</h3>
+                <p className="mt-1 text-slate-500">{task.documentSubtype || task.documentType} · {task.department}{task.timeRange ? ` · ${task.timeRange}` : ""}{task.audience ? ` · 报送${task.audience}` : ""}</p>
               </div>
-            </section>
+              <button type="button" onClick={() => setStep(1)} className="rounded border border-slate-200 bg-white px-3 py-1.5 text-[11px] text-slate-600">修改主题</button>
+            </div>
+            {task.focus && <p className="mt-3 border-t border-slate-200 pt-3"><span className="font-semibold">重点关注：</span>{task.focus}</p>}
+          </section>
+          {analysis && (
+            <details className="rounded border border-teal-100 bg-teal-50/40 p-4 text-xs text-slate-700">
+              <summary className="cursor-pointer font-bold text-teal-900">AI 主题理解与检索范围</summary>
+              <p className="mt-3">{analysis.documentPurpose}</p>
+              <div className="mt-3 grid gap-3 md:grid-cols-2">
+                <div><p className="font-semibold">检索关键词</p><p>{analysis.keywords.join("、") || "未提供"}</p></div>
+                <div><p className="font-semibold">风险提示</p><p>{analysis.riskPoints.join("；") || "无"}</p></div>
+              </div>
+            </details>
           )}
           <section className="rounded border border-slate-200 bg-white p-4">
             <div className="flex items-center justify-between">
               <div><h3 className="text-sm font-bold text-slate-800">确认完整提纲</h3><p className="mt-1 text-[11px] text-slate-400">生成时将严格按照这里确认的章节顺序起草。</p></div>
-              <button type="button" onClick={() => setConfirmedOutline((current) => [...current, "新增章节"])} className="rounded border border-slate-200 px-3 py-1.5 text-[11px] text-slate-600">添加章节</button>
+              <div className="flex gap-2">
+                <button type="button" disabled={loading} onClick={() => void triggerSemanticRecommendation(`${task.title} ${analysis?.keywords.join(" ") ?? ""}`, confirmedOutline)} className="rounded border border-teal-200 px-3 py-1.5 text-[11px] text-teal-700 disabled:opacity-50">按当前提纲重新检索</button>
+                <button type="button" onClick={() => setConfirmedOutline((current) => [...current, "新增章节"])} className="rounded border border-slate-200 px-3 py-1.5 text-[11px] text-slate-600">添加章节</button>
+              </div>
             </div>
             <div className="mt-3 space-y-2">
               {confirmedOutline.map((item, index) => <div key={`${index}-${item}`} className="flex items-center gap-2">
@@ -481,49 +603,81 @@ export default function GuidedGeneratePage() {
               </div>)}
             </div>
           </section>
-          <h3 className={theme.sectionTitle}>第2步：选择深度参考语料</h3>
+          {retrievalIsStale && <div className="rounded border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800">提纲已经修改，当前覆盖结果可能过期。请点击“按当前提纲重新检索”后再继续。</div>}
+          <section className="rounded border border-slate-200 bg-white p-4">
+            <div className="flex flex-wrap items-center justify-between gap-3">
+              <div><h3 className="text-sm font-bold text-slate-800">提纲语料覆盖</h3><p className="mt-1 text-[11px] text-slate-400">系统分别检索每个章节，避免只按整篇标题匹配。</p></div>
+              <button type="button" disabled={!outlineCoverage.some((item) => item.matches.length)} onClick={applyRecommendedBundle} className="rounded bg-teal-800 px-3 py-2 text-[11px] font-semibold text-white disabled:opacity-40">采用推荐语料组合</button>
+            </div>
+            <div className="mt-3 grid gap-2 sm:grid-cols-2">
+              {outlineCoverage.map((item) => {
+                const selected = selectedPassages.some((passage) => passage.section === item.section);
+                return <div key={item.section} className={`rounded border px-3 py-2 text-[11px] ${selected ? "border-emerald-200 bg-emerald-50" : item.status === "covered" ? "border-blue-100 bg-blue-50/50" : item.status === "weak" ? "border-amber-200 bg-amber-50" : "border-red-100 bg-red-50"}`}>
+                  <div className="flex justify-between gap-2"><span className="font-semibold text-slate-700">{item.section}</span><span className={selected ? "text-emerald-700" : item.status === "covered" ? "text-blue-600" : item.status === "weak" ? "text-amber-700" : "text-red-600"}>{selected ? "已选引用" : item.status === "covered" ? `匹配${item.matches.length}段` : item.status === "weak" ? "弱匹配" : "缺少语料"}</span></div>
+                </div>;
+              })}
+            </div>
+          </section>
+          <h3 className={theme.sectionTitle}>第2步：按文件审核命中段落</h3>
           <div className="space-y-3">
-            <p className="text-xs text-slate-500">已自动推荐高度相关的历史公文。勾选您希望参考和模仿风格的文档：</p>
+            <p className="text-xs text-slate-500">先查看文件的匹配原因和覆盖章节，再展开勾选具体引用段落；只有选中的段落会进入生成接口。</p>
             {loading && recommendedDocs.length === 0 ? (
               <p className="text-xs text-slate-400 text-center py-8 animate-pulse">正在向量匹配推荐参考材料...</p>
             ) : recommendedDocs.length === 0 ? (
               <p className="text-xs text-slate-400 text-center py-6 border rounded">暂无自动匹配推荐，可使用下方检索框进行查找</p>
             ) : (
-              <div className="border border-slate-200 rounded overflow-hidden">
-                <div className="grid grid-cols-12 bg-slate-50 text-[10px] text-slate-500 font-semibold p-2 border-b">
-                  <div className="col-span-1 text-center">选择</div>
-                  <div className="col-span-8">参考公文名称</div>
-                  <div className="col-span-3 text-right">匹配关联度</div>
-                </div>
-                <div className="divide-y divide-slate-100 max-h-60 overflow-y-auto">
+              <div className="space-y-3">
                   {recommendedDocs.map((doc) => (
-                    <label key={doc.id} className="grid grid-cols-12 p-3 items-center hover:bg-slate-50/50 cursor-pointer text-xs">
-                      <div className="col-span-1 text-center">
-                        <input type="checkbox" checked={selectedIds.includes(doc.id)} onChange={() => handleToggleDoc(doc.id)} />
+                    <article key={doc.id} className="overflow-hidden rounded border border-slate-200 bg-white text-xs">
+                      <div className="flex items-start gap-3 p-4">
+                        <button type="button" onClick={() => setExpandedDocumentIds((current) => current.includes(doc.id) ? current.filter((id) => id !== doc.id) : [...current, doc.id])} className="mt-0.5 h-6 w-6 shrink-0 rounded border border-slate-200 text-slate-500" aria-label={`${expandedDocumentIds.includes(doc.id) ? "收起" : "展开"}${doc.filename}`}>{expandedDocumentIds.includes(doc.id) ? "−" : "+"}</button>
+                        <div className="min-w-0 flex-1">
+                          <div className="flex flex-wrap items-center justify-between gap-2">
+                            <p className="font-semibold text-slate-800">{doc.filename}</p>
+                            <span className="rounded bg-blue-50 px-2 py-1 text-[10px] font-bold text-blue-700">综合匹配 {Math.round(doc.score * 100)}%</span>
+                          </div>
+                          <p className="mt-1 text-[10px] text-slate-400">{documentTypeLabel(doc.documentType)} · {doc.department} · {doc.verificationStatus === "verified" ? "已核验" : "未核验"}</p>
+                          <p className="mt-2 text-[10px] text-slate-500"><span className="font-semibold">覆盖章节：</span>{doc.coveredSections.join("、")}</p>
+                          <p className="mt-1 text-[10px] text-slate-500"><span className="font-semibold">推荐理由：</span>{doc.matchReasons.join("；") || "正文语义相关"}</p>
+                        </div>
+                        <button type="button" onClick={() => toggleDocumentPassages(doc)} className="shrink-0 rounded border border-teal-200 px-2 py-1.5 text-[10px] text-teal-700">{doc.passages.every((passage) => selectedPassages.some((item) => item.passageId === passage.passageId)) ? "取消本文件" : "选择推荐片段"}</button>
                       </div>
-                      <div className="col-span-8 min-w-0" title={doc.filename}>
-                        <p className="truncate font-semibold text-slate-800">{doc.filename}</p>
-                        <p className="mt-1 truncate text-[10px] font-normal text-slate-400">{documentTypeLabel(doc.documentType)} · {safeParseList(doc.usageTags).map(usageTagLabel).join("、") || "通用参考"} · {doc.verificationStatus === "verified" ? "已核验" : "未核验"}</p>
+                      {expandedDocumentIds.includes(doc.id) && <div className="border-t border-slate-100 bg-slate-50/50 p-4">
+                        <fieldset>
+                          <legend className="text-[10px] font-semibold text-slate-600">本文件在本次写作中的用途（可多选）</legend>
+                          <div className="mt-2 flex flex-wrap gap-2">{usageTagOptions.map((option) => <label key={option.value} className="flex items-center gap-1.5 rounded border border-slate-200 bg-white px-2 py-1.5 text-[10px]"><input type="checkbox" checked={(documentUses[doc.id] ?? defaultDocumentUses(doc)).includes(option.value)} onChange={() => toggleDocumentUse(doc, option.value)} />{option.label}</label>)}</div>
+                        </fieldset>
+                        <div className="mt-4 space-y-2">
+                          {doc.passages.map((passage) => <label key={passage.passageId} className={`block cursor-pointer rounded border p-3 ${selectedPassages.some((item) => item.passageId === passage.passageId) ? "border-teal-300 bg-teal-50" : "border-slate-200 bg-white"}`}>
+                            <div className="flex items-start gap-2">
+                              <input type="checkbox" className="mt-0.5" checked={selectedPassages.some((item) => item.passageId === passage.passageId)} onChange={() => togglePassage(doc, passage)} />
+                              <div className="min-w-0 flex-1">
+                                <div className="flex flex-wrap items-center justify-between gap-2"><span className="font-semibold text-teal-800">适用：{passage.section}</span><span className="text-[10px] text-blue-600">片段匹配 {Math.round(passage.score * 100)}%</span></div>
+                                <p className="mt-2 max-h-24 overflow-y-auto whitespace-pre-wrap leading-relaxed text-slate-600">{passage.text}</p>
+                                <p className="mt-2 text-[10px] text-slate-400">{passage.matchReasons.join("；")}</p>
+                              </div>
+                            </div>
+                          </label>)}
+                        </div>
                       </div>
-                      <div className="col-span-3 text-right text-[10px] text-blue-600 font-bold">{Math.round(doc.score * 100)}%</div>
-                    </label>
+                      }
+                    </article>
                   ))}
-                </div>
               </div>
             )}
           </div>
           <form onSubmit={handleManualSearch} className="border-t pt-4">
             <div className="flex gap-2">
-              <input type="text" autoComplete="off" placeholder="手动输入其他搜索词匹配追加检索..." value={manualKeyword} onChange={(e) => setManualKeyword(e.target.value)} className={theme.input} />
-              <button type="submit" disabled={loading} className={theme.secondaryBtn}>检索</button>
+              <input type="text" autoComplete="off" placeholder="补充主题对象、区域、时间或业务关键词后重新检索..." value={manualKeyword} onChange={(e) => setManualKeyword(e.target.value)} className={theme.input} />
+              <button type="submit" disabled={loading} className={theme.secondaryBtn}>按提纲检索</button>
             </div>
           </form>
           <div className="rounded border border-teal-100 bg-teal-50/40 px-3 py-2 text-xs text-teal-900">
-            已确认 {selectedIds.length} 份参考材料。它们将仅用于结构、措辞和有来源事实的写作参考；未选择的材料不会进入草稿生成。
+            已确认 <strong>{selectedIds.length}</strong> 份文件、<strong>{selectedPassages.length}</strong> 个引用片段；已覆盖 <strong>{selectedCoverageCount}/{confirmedOutline.length}</strong> 个章节（知识库可匹配 {availableCoverageCount}/{confirmedOutline.length} 章）。生成时仅发送这些片段，并按文件用途限制其使用方式。
           </div>
           <div className="flex justify-between border-t pt-4">
             <button onClick={() => setStep(1)} className={theme.secondaryBtn}>上一步</button>
-            <button disabled={!confirmedOutline.length || confirmedOutline.some((item) => !item.trim())} onClick={() => setStep(3)} className={`${theme.primaryBtn} disabled:cursor-not-allowed disabled:opacity-50`}>确认提纲并填写写作要求</button>
+            <button disabled={retrievalIsStale || !confirmedOutline.length || confirmedOutline.some((item) => !item.trim())} onClick={() => setStep(3)} className={`${theme.primaryBtn} disabled:cursor-not-allowed disabled:opacity-50`}>确认语料包并填写写作要求</button>
           </div>
         </div>
       )}

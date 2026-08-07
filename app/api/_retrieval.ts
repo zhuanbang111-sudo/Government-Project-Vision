@@ -14,6 +14,21 @@ export type RetrievalDocument = {
 
 export type RankedDocument = RetrievalDocument & { score: number; matchReasons: string[] };
 
+export type PassageMatch = {
+  passageId: string;
+  passageIndex: number;
+  section: string;
+  text: string;
+  score: number;
+  matchReasons: string[];
+};
+
+export type OutlineCoverage = {
+  section: string;
+  status: "covered" | "weak" | "missing";
+  matches: Array<PassageMatch & { documentId: number }>;
+};
+
 function readVector(value: string | null) {
   if (!value) return null;
   try {
@@ -47,6 +62,81 @@ function queryTerms(query: string) {
     }
   }
   return [...terms].slice(0, 40);
+}
+
+export function segmentDocumentContent(content: string, maxPassages = 120) {
+  const blocks = content
+    .replace(/\r\n?/g, "\n")
+    .split(/\n+/)
+    .map((item) => item.replace(/\s+/g, " ").trim())
+    .filter(Boolean);
+  const passages: string[] = [];
+  for (const block of blocks) {
+    if (block.length <= 900) {
+      passages.push(block);
+    } else {
+      const sentences = block.match(/[^。！？；]+[。！？；]?/g)?.map((item) => item.trim()).filter(Boolean) ?? [block];
+      let buffer = "";
+      for (const sentence of sentences) {
+        if (buffer && buffer.length + sentence.length > 720) { passages.push(buffer); buffer = ""; }
+        if (sentence.length > 900) {
+          for (let offset = 0; offset < sentence.length; offset += 720) passages.push(sentence.slice(offset, offset + 720));
+        } else {
+          buffer += sentence;
+        }
+        if (passages.length >= maxPassages) break;
+      }
+      if (buffer && passages.length < maxPassages) passages.push(buffer);
+    }
+    if (passages.length >= maxPassages) break;
+  }
+  return passages.slice(0, maxPassages).map((text, index) => ({ index, text }));
+}
+
+function passageLexicalScore(text: string, query: string) {
+  const terms = queryTerms(query);
+  const normalized = text.toLowerCase();
+  let hits = 0;
+  const matched: string[] = [];
+  for (const term of terms) {
+    if (!normalized.includes(term)) continue;
+    hits += term.length > 2 ? 2 : 1;
+    if (matched.length < 4) matched.push(term);
+  }
+  const score = terms.length ? Math.min(hits / Math.max(terms.length * 1.5, 1), 1) : 0;
+  return { score, matched };
+}
+
+export function rankPassagesByOutline(options: {
+  documents: RankedDocument[];
+  topic: string;
+  outline: string[];
+  matchesPerSection?: number;
+}) {
+  const { documents, topic, outline, matchesPerSection = 6 } = options;
+  const segmentedDocuments = documents.map((document) => ({ document, passages: segmentDocumentContent(document.content) }));
+  return outline.map((section, sectionIndex): OutlineCoverage => {
+    const candidates = segmentedDocuments.flatMap(({ document, passages }) => passages.map((passage) => {
+      const sectionLexical = passageLexicalScore(passage.text, section);
+      const topicLexical = passageLexicalScore(passage.text, topic);
+      const matchReasons = [...document.matchReasons];
+      const matched = [...new Set([...sectionLexical.matched, ...topicLexical.matched])];
+      const score = matched.length ? Math.min(sectionLexical.score * 0.65 + topicLexical.score * 0.2 + document.score * 0.15, 1) : 0;
+      if (matched.length) matchReasons.unshift(`命中：${matched.slice(0, 4).join("、")}`);
+      return {
+        documentId: document.id,
+        passageId: `${document.id}:${passage.index}:${sectionIndex}`,
+        passageIndex: passage.index,
+        section,
+        text: passage.text,
+        score: Number(score.toFixed(4)),
+        matchReasons: [...new Set(matchReasons)].slice(0, 5),
+      };
+    })).sort((left, right) => right.score - left.score);
+    const matches = candidates.filter((item) => item.score >= 0.08).slice(0, matchesPerSection);
+    const bestScore = matches[0]?.score ?? 0;
+    return { section, status: bestScore >= 0.28 ? "covered" : matches.length ? "weak" : "missing", matches };
+  });
 }
 
 function lexicalScore(document: RetrievalDocument, query: string, preferredType?: KnowledgeDocumentType | null) {
