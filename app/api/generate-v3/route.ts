@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { documentTypeLabel, normalizeUsageTags, safeParseList, usageTagLabel, writingTypeToKnowledgeType } from "../../knowledge";
 import { getDatabase, placeholders } from "../_platform";
+import { loadExternalReferencePassages, parseExternalReferences } from "../_official-sources";
 import { rankReferenceDocuments, segmentDocumentContent, type RetrievalDocument } from "../_retrieval";
 import { getChatCompletionsUrl, getWritingAiSettings } from "../_settings";
 
@@ -44,19 +45,20 @@ function parseSelectedReferences(value: unknown): SelectedReference[] {
 export async function POST(request: NextRequest) {
   try {
     const body: unknown = await request.json();
-    const { topic, selectedParagraphs, points, newData = "", selectedIds, selectedReferences, documentType = "", documentSubtype = "", knowledgeRequirements = [] } = body as {
+    const { topic, selectedParagraphs, points = "", newData = "", selectedIds, selectedReferences, externalReferences, documentType = "", documentSubtype = "", knowledgeRequirements = [] } = body as {
       topic?: unknown;
       selectedParagraphs?: unknown;
       points?: unknown;
       newData?: unknown;
       selectedIds?: unknown;
       selectedReferences?: unknown;
+      externalReferences?: unknown;
       documentType?: unknown;
       documentSubtype?: unknown;
       knowledgeRequirements?: unknown;
     };
-    if (typeof topic !== "string" || !topic.trim() || typeof points !== "string" || !points.trim() || !Array.isArray(selectedParagraphs) || !selectedParagraphs.length) {
-      return NextResponse.json({ error: "主题、完整提纲和写作要点均为必填项" }, { status: 400 });
+    if (typeof topic !== "string" || !topic.trim() || typeof points !== "string" || !Array.isArray(selectedParagraphs) || !selectedParagraphs.length) {
+      return NextResponse.json({ error: "主题和完整提纲为必填项" }, { status: 400 });
     }
     const paragraphs = selectedParagraphs.filter((item): item is ParagraphType =>
       typeof item === "object" && item !== null
@@ -87,6 +89,7 @@ export async function POST(request: NextRequest) {
         ? (await db.prepare(`${selectSql} AND id IN (${placeholders(ids)})`).bind(...ids).all<RetrievalDocument>()).results
         : []
       : (await db.prepare(`${selectSql} ORDER BY verification_status DESC, created_at DESC LIMIT 500`).all<RetrievalDocument>()).results;
+    const requestedExternalReferences = parseExternalReferences(externalReferences);
 
     const retrievalQuery = `${topic}\n${documentType}\n${documentSubtype}\n${points}\n${requiredUses.join(" ")}`.slice(0, MAX_INPUT_CHARS);
     const ranked = passageSelectionProvided ? null : await rankReferenceDocuments({
@@ -98,8 +101,9 @@ export async function POST(request: NextRequest) {
       includeFallback: ids.length > 0,
     });
     const references = ranked?.results ?? documents;
-    let remainingChars = MAX_REFERENCE_CHARS;
-    const sourceEntries: Array<{ id: number; marker: string; filename: string; verified: boolean; passageIndex?: number; section?: string; excerpt?: string; uses?: string[] }> = [];
+    const localReferenceBudget = requestedExternalReferences.length ? 8_000 : MAX_REFERENCE_CHARS;
+    let remainingChars = localReferenceBudget;
+    const sourceEntries: Array<{ id: number | string; kind: "knowledge" | "official-web"; marker: string; filename: string; verified: boolean; passageIndex?: number; section?: string; excerpt?: string; uses?: string[]; url?: string; publisher?: string; fetchedAt?: string; contentHash?: string }> = [];
     let referenceText = "";
     if (passageSelectionProvided) {
       const byId = new Map(references.map((document) => [document.id, document]));
@@ -120,7 +124,7 @@ export async function POST(request: NextRequest) {
         remainingChars -= excerpt.length;
         const uses = selection.uses.length ? selection.uses : normalizeUsageTags(document.usage_tags);
         blocks.push(`【${marker}】${document.filename}\n适用章节：${selection.section || "未指定"}；指定用途：${uses.map(usageTagLabel).join("、") || "通用参考"}；核验状态：${document.verification_status === "verified" ? "已核验" : "未核验"}\n${excerpt}`);
-        sourceEntries.push({ id: document.id, marker, filename: document.filename, verified: document.verification_status === "verified", passageIndex: passage.index, section: selection.section, excerpt: excerpt.slice(0, 180), uses });
+        sourceEntries.push({ id: document.id, kind: "knowledge", marker, filename: document.filename, verified: document.verification_status === "verified", passageIndex: passage.index, section: selection.section, excerpt: excerpt.slice(0, 180), uses });
       }
       if (passageSelections.length && !sourceEntries.length) return NextResponse.json({ error: "所选引用片段已失效，请返回第二步重新检索" }, { status: 400 });
       referenceText = blocks.join("\n\n");
@@ -131,9 +135,35 @@ export async function POST(request: NextRequest) {
         remainingChars -= excerpt.length;
         const uses = safeParseList(document.usage_tags).map(usageTagLabel).join("、") || "通用参考";
         const tags = safeParseList(document.topic_tags).join("、") || "无";
-        sourceEntries.push({ id: document.id, marker: `来源${index + 1}`, filename: document.filename, verified: document.verification_status === "verified" });
+        sourceEntries.push({ id: document.id, kind: "knowledge", marker: `来源${index + 1}`, filename: document.filename, verified: document.verification_status === "verified" });
         return `【来源${index + 1}】${document.filename}\n文种：${documentTypeLabel(document.document_type)}；用途：${uses}；主题标签：${tags}；核验状态：${document.verification_status === "verified" ? "已核验" : "未核验"}\n${excerpt}`;
       }).filter(Boolean).join("\n\n");
+    }
+
+    const localCharsUsed = localReferenceBudget - remainingChars;
+    remainingChars = MAX_REFERENCE_CHARS - localCharsUsed;
+    const externalPassages = await loadExternalReferencePassages(externalReferences);
+    if (requestedExternalReferences.length && externalPassages.length !== requestedExternalReferences.length) {
+      return NextResponse.json({ error: "所选政府官网引用片段已失效，请在第三步重新选用" }, { status: 400 });
+    }
+    if (externalPassages.length && remainingChars > 0) {
+      const sourceNumbers = new Map<string, number>();
+      const passageNumbers = new Map<string, number>();
+      const blocks: string[] = [];
+      for (const item of externalPassages) {
+        if (remainingChars <= 0) break;
+        if (!sourceNumbers.has(item.source.id)) sourceNumbers.set(item.source.id, sourceNumbers.size + 1);
+        const sourceNumber = sourceNumbers.get(item.source.id) ?? 1;
+        const passageNumber = (passageNumbers.get(item.source.id) ?? 0) + 1;
+        passageNumbers.set(item.source.id, passageNumber);
+        const marker = `外部来源${sourceNumber}-片段${passageNumber}`;
+        const excerpt = item.passage.text.slice(0, remainingChars);
+        remainingChars -= excerpt.length;
+        const uses = item.selection.uses.filter((use) => use === "facts" || use === "policy");
+        blocks.push(`【${marker}】${item.source.title}\n发布单位：${item.source.publisher || "政府网站"}；官网链接：${item.source.url}；适用章节：${item.selection.section}；指定用途：${uses.map(usageTagLabel).join("、") || "事实、政策依据"}\n${excerpt}`);
+        sourceEntries.push({ id: item.source.id, kind: "official-web", marker, filename: item.source.title, verified: true, passageIndex: item.passage.index, section: item.selection.section, excerpt: excerpt.slice(0, 180), uses: uses.length ? uses : ["facts", "policy"], url: item.source.url, publisher: item.source.publisher || undefined, fetchedAt: item.source.fetched_at, contentHash: item.source.content_hash });
+      }
+      referenceText = [referenceText, blocks.join("\n\n")].filter(Boolean).join("\n\n");
     }
 
     const structure = paragraphs.map((paragraph, index) => `${index + 1}. ${paragraph.name}：${paragraph.description}`).join("\n");
@@ -141,7 +171,7 @@ export async function POST(request: NextRequest) {
 严格遵守以下规则：
 1. 按用户已经确认的完整提纲依次成文，不擅自改变章节结构。
 2. 具体事实、数字、时间、机构职责和政策依据只能来自参考材料或用户补充数据。
-3. 使用参考材料中的事实、数据或政策依据时，在对应句末原样标注材料给出的【来源N】或【来源N-片段M】；同一句可引用多个来源。
+3. 使用参考材料中的事实、数据或政策依据时，在对应句末原样标注材料给出的【来源N】、【来源N-片段M】或【外部来源N-片段M】；同一句可引用多个来源。
 4. 使用用户补充数据时标注【用户提供】；缺少必要数据时写【此处需补充具体数据】。
 5. 只能模仿参考材料的结构和正式措辞，不得复制与当前主题无关的事实，不得虚构来源。
 6. 已核验来源优先作为事实和政策依据；未核验来源只能作为待核查参考。
@@ -165,8 +195,8 @@ export async function POST(request: NextRequest) {
     if (typeof text !== "string" || !text.trim()) throw new Error("写作服务未返回有效文本");
 
     const draft = extractDocument(text);
-    const referenceIds = [...new Set(sourceEntries.map((source) => source.id))];
-    const sources = sourceEntries.map((source) => `${source.marker}. [${source.filename}]${source.passageIndex !== undefined ? `｜原文第${source.passageIndex + 1}段` : ""}${source.section ? `｜用于“${source.section}”` : ""}（${source.verified ? "已核验" : "未核验"}）`).join("\n") || "未使用参考文件";
+    const referenceIds = [...new Set(sourceEntries.filter((source) => source.kind === "knowledge").map((source) => source.id as number))];
+    const sources = sourceEntries.map((source) => `${source.marker}. [${source.filename}]${source.publisher ? `｜${source.publisher}` : ""}${source.passageIndex !== undefined ? `｜原文第${source.passageIndex + 1}段` : ""}${source.section ? `｜用于“${source.section}”` : ""}${source.url ? `｜${source.url}` : ""}（${source.verified ? "已核验" : "未核验"}）`).join("\n") || "未使用参考文件";
     await db.prepare("INSERT INTO generations (content, doc_type, topic, reference_ids) VALUES (?, ?, ?, ?)")
       .bind(draft, typeof documentType === "string" && documentType ? documentType : "guided", topic.trim(), JSON.stringify(sourceEntries)).run();
     return NextResponse.json({

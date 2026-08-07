@@ -1,10 +1,12 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getDatabase, placeholders } from "../_platform";
+import { loadExternalReferencePassages } from "../_official-sources";
 import { segmentDocumentContent } from "../_retrieval";
+import { getChatCompletionsUrl, getWritingAiSettings } from "../_settings";
 
 export async function POST(request: NextRequest) {
   try {
-    const { draftContent, selectedIds, selectedReferences } = await request.json() as { draftContent?: unknown; selectedIds?: unknown; selectedReferences?: unknown };
+    const { draftContent, selectedIds, selectedReferences, externalReferences } = await request.json() as { draftContent?: unknown; selectedIds?: unknown; selectedReferences?: unknown; externalReferences?: unknown };
     if (typeof draftContent !== "string" || !draftContent.trim()) return NextResponse.json({ error: "草稿内容不能为空" }, { status: 400 });
     const apiKey = process.env.DEEPSEEK_API_KEY;
     if (!apiKey) return NextResponse.json({ error: "未配置 DEEPSEEK_API_KEY" }, { status: 500 });
@@ -20,16 +22,20 @@ export async function POST(request: NextRequest) {
         ? [{ documentId: Number(candidate.documentId), passageIndex: Number(candidate.passageIndex) }]
         : [];
     }).slice(0, 24) : [];
-    const sourceText = passageSelections.length
+    const localSourceText = passageSelections.length
       ? passageSelections.flatMap((selection) => {
         const document = references.find((item) => item.id === selection.documentId);
         const passage = document ? segmentDocumentContent(document.content).find((item) => item.index === selection.passageIndex) : null;
         return document && passage ? [`[${document.filename}｜片段${passage.index + 1}]\n${passage.text}`] : [];
       }).join("\n\n") || "所选引用片段已失效"
       : references.map((document) => `[${document.filename}]\n${document.content.slice(0, 6000)}`).join("\n\n") || "未选择参考材料";
-    const response = await fetch("https://api.deepseek.com/chat/completions", {
+    const externalPassages = await loadExternalReferencePassages(externalReferences);
+    const externalSourceText = externalPassages.map((item) => `[政府官网｜${item.source.title}｜片段${item.passage.index + 1}]\n链接：${item.source.url}\n${item.passage.text}`).join("\n\n");
+    const sourceText = [localSourceText, externalSourceText].filter(Boolean).join("\n\n");
+    const settings = await getWritingAiSettings(db);
+    const response = await fetch(getChatCompletionsUrl(settings.baseUrl), {
       method: "POST", headers: { "Content-Type": "application/json", Authorization: `Bearer ${apiKey}` },
-      body: JSON.stringify({ model: process.env.DEEPSEEK_MODEL || "deepseek-chat", temperature: 0.1, messages: [
+      body: JSON.stringify({ model: settings.model, temperature: 0.1, messages: [
         { role: "system", content: "你是政府材料合规审查助手。只返回 JSON 数组，每项包含 dimension、fragment、description。仅标出无法由参考材料支持的事实、数据、时间、政策或明显逻辑矛盾。" },
         { role: "user", content: `【参考材料】\n${sourceText}\n\n【待审草稿】\n${draftContent.slice(0, 30000)}` },
       ] }), signal: AbortSignal.timeout(60_000),
