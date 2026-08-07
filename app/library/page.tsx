@@ -1,526 +1,287 @@
-'use client';
+"use client";
 
-import React, { useState, useEffect } from 'react';
-import { appendDocxFiles, readUploadResponse } from '../upload-client';
+import { FormEvent, useCallback, useEffect, useMemo, useState } from "react";
+import {
+  documentTypeLabel,
+  documentTypeOptions,
+  normalizeTopicTags,
+  safeParseList,
+  usageTagLabel,
+  usageTagOptions,
+  type KnowledgeDocumentType,
+  type KnowledgeUsageTag,
+} from "../knowledge";
+import { appendDocxFiles, readUploadResponse } from "../upload-client";
 
-interface Document {
-  id: string;
-  name?: string;      // 兼容可能存在的列名
-  filename?: string;  // 兼容真实的 documents.filename
-  type: string;
-  size: number;
-  status: string;
+type DocumentItem = {
+  id: number;
+  filename: string;
+  file_type: string;
+  file_size: number | null;
+  department: string | null;
+  document_type: string;
+  usage_tags: string;
+  topic_tags: string;
+  processing_status: "ready" | "failed" | "disabled";
+  vector_status: "pending" | "ready" | "failed";
+  verification_status: "unverified" | "verified";
   created_at: string;
-  department?: string;
-  verified?: number;
-  knowledge_type?: string;
+  updated_at: string | null;
+};
+
+type EditState = {
+  department: string;
+  documentType: KnowledgeDocumentType;
+  usageTags: KnowledgeUsageTag[];
+  topicTags: string;
+  processingStatus: "ready" | "disabled";
+  verificationStatus: "unverified" | "verified";
+};
+
+const statusMeta = {
+  ready: { label: "可用于写作", className: "bg-emerald-50 text-emerald-700" },
+  failed: { label: "处理失败", className: "bg-red-50 text-red-700" },
+  disabled: { label: "已停用", className: "bg-slate-100 text-slate-500" },
+} as const;
+
+function parseError(payload: unknown, fallback: string) {
+  return typeof payload === "object" && payload !== null && "error" in payload && typeof payload.error === "string"
+    ? payload.error : fallback;
+}
+
+function formatSize(value: number | null) {
+  const bytes = Number(value);
+  if (!Number.isFinite(bytes) || bytes <= 0) return "历史数据未记录";
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+  return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
 }
 
 export default function LibraryPage() {
-  const [documents, setDocuments] = useState<Document[]>([]);
+  const [documents, setDocuments] = useState<DocumentItem[]>([]);
   const [loading, setLoading] = useState(true);
-  const [searchQuery, setSearchQuery] = useState('');
-  const [activeTab, setActiveTab] = useState('all'); // all, document, fact, policy, department_rule, case, template
-  const [uploading, setUploading] = useState(false);
+  const [notice, setNotice] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
-  const [department, setDepartment] = useState('城建处');
-  const [classification, setClassification] = useState('document'); // 默认上传分类
+  const [department, setDepartment] = useState("");
+  const [documentType, setDocumentType] = useState<KnowledgeDocumentType | "auto">("auto");
+  const [usageTags, setUsageTags] = useState<KnowledgeUsageTag[]>([]);
+  const [topicTags, setTopicTags] = useState("");
+  const [uploading, setUploading] = useState(false);
+  const [query, setQuery] = useState("");
+  const [typeFilter, setTypeFilter] = useState("all");
+  const [usageFilter, setUsageFilter] = useState("all");
+  const [statusFilter, setStatusFilter] = useState("ready");
+  const [editingId, setEditingId] = useState<number | null>(null);
+  const [editState, setEditState] = useState<EditState | null>(null);
+  const [saving, setSaving] = useState(false);
+  const [previewId, setPreviewId] = useState<number | null>(null);
+  const [previewContent, setPreviewContent] = useState("");
 
-  // 1. 获取文档数据
-  const fetchDocuments = async () => {
+  const fetchDocuments = useCallback(async () => {
+    setLoading(true);
     try {
-      setLoading(true);
-      const response = await fetch('/api/documents');
-      if (response.ok) {
-        const data: unknown = await response.json();
-        setDocuments(Array.isArray(data) ? data as Document[] : []);
-      }
-    } catch (error) {
-      console.error('获取文档失败:', error);
+      const response = await fetch("/api/documents", { cache: "no-store" });
+      const payload: unknown = await response.json();
+      if (!response.ok || !Array.isArray(payload)) throw new Error(parseError(payload, "知识资产加载失败"));
+      setDocuments(payload as DocumentItem[]);
+    } catch (caught: unknown) {
+      setError(caught instanceof Error ? caught.message : "知识资产加载失败");
     } finally {
       setLoading(false);
     }
-  };
+  }, []);
 
   useEffect(() => {
     const timer = window.setTimeout(() => { void fetchDocuments(); }, 0);
     return () => window.clearTimeout(timer);
-  }, []);
+  }, [fetchDocuments]);
 
-  // 2. 处理文件上传
-  const handleUpload = async (e: React.FormEvent<HTMLFormElement>) => {
-    e.preventDefault();
+  const stats = useMemo(() => ({
+    total: documents.length,
+    ready: documents.filter((item) => item.processing_status === "ready").length,
+    verified: documents.filter((item) => item.verification_status === "verified").length,
+    vectorPending: documents.filter((item) => item.vector_status === "pending").length,
+    types: Object.fromEntries(documentTypeOptions.map((type) => [type.value, documents.filter((item) => item.document_type === type.value).length])),
+  }), [documents]);
+
+  const filteredDocuments = useMemo(() => documents.filter((item) => {
+    const itemUsageTags = safeParseList(item.usage_tags);
+    const itemTopicTags = safeParseList(item.topic_tags);
+    const haystack = `${item.filename} ${item.department ?? ""} ${itemTopicTags.join(" ")}`.toLowerCase();
+    return (!query.trim() || haystack.includes(query.trim().toLowerCase()))
+      && (typeFilter === "all" || item.document_type === typeFilter)
+      && (usageFilter === "all" || itemUsageTags.includes(usageFilter))
+      && (statusFilter === "all" || item.processing_status === statusFilter);
+  }), [documents, query, statusFilter, typeFilter, usageFilter]);
+
+  const toggleUploadUsage = (value: KnowledgeUsageTag) => {
+    setUsageTags((current) => current.includes(value) ? current.filter((item) => item !== value) : [...current, value]);
+  };
+
+  const handleUpload = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
     if (!selectedFile) return;
-
     setUploading(true);
-    const formData = new FormData();
-    formData.append('department', department);
-    formData.append('libraryType', classification);
-
+    setNotice(null);
+    setError(null);
     try {
+      const formData = new FormData();
+      formData.append("department", department.trim() || "未分类");
+      if (documentType !== "auto") formData.append("documentType", documentType);
+      if (usageTags.length) formData.append("usageTags", JSON.stringify(usageTags));
+      formData.append("topicTags", JSON.stringify(normalizeTopicTags(topicTags)));
       await appendDocxFiles(formData, [selectedFile]);
-      const response = await fetch('/api/upload', {
-        method: 'POST',
-        body: formData,
-      });
-
-      await readUploadResponse(response);
-      if (response.ok) {
-        setSelectedFile(null);
-        const fileInput = document.getElementById('file-upload') as HTMLInputElement;
-        if (fileInput) fileInput.value = '';
-        await fetchDocuments();
-      } else {
-        alert('上传失败，请重试');
-      }
-    } catch (error) {
-      console.error('上传失败:', error);
-      alert('上传过程中发生异常');
+      const response = await fetch("/api/upload", { method: "POST", body: formData });
+      const result = await readUploadResponse(response);
+      if (!result.successCount) throw new Error(result.details[0]?.message || "上传失败");
+      setNotice(result.details[0]?.message || "知识资产录入成功");
+      setSelectedFile(null);
+      setDocumentType("auto");
+      setUsageTags([]);
+      setTopicTags("");
+      const input = document.getElementById("knowledge-file") as HTMLInputElement | null;
+      if (input) input.value = "";
+      await fetchDocuments();
+    } catch (caught: unknown) {
+      setError(caught instanceof Error ? caught.message : "上传失败");
     } finally {
       setUploading(false);
     }
   };
 
-  // 3. 删除文件
-  const handleDelete = async (id: string) => {
-    if (!confirm('确定要删除该知识资产吗？')) return;
-
-    try {
-      const response = await fetch(`/api/documents/${id}`, {
-        method: 'DELETE',
-      });
-
-      if (response.ok) {
-        await fetchDocuments();
-      } else {
-        const payload = await response.json().catch(() => null) as { error?: string } | null;
-        alert(payload?.error || '删除失败，请重试');
-      }
-    } catch (error) {
-      console.error('删除失败:', error);
-    }
-  };
-
-  // 4. 辅助推断：防御性代码，同时对齐 doc.filename 和 doc.name，防止 undefined 引发崩溃
-  const getDocumentClassification = (doc: Document): string => {
-    if (doc.knowledge_type) return doc.knowledge_type;
-    const currentName = doc.filename || doc.name || '';
-    const lowerName = currentName.toLowerCase();
-    
-    if (lowerName.includes('统计') || lowerName.includes('数据') || lowerName.includes('指标') || lowerName.includes('数值')) {
-      return 'fact';
-    }
-    if (lowerName.includes('职责') || lowerName.includes('定岗') || lowerName.includes('编制') || lowerName.includes('管理技术标准')) {
-      return 'department_rule';
-    }
-    if (lowerName.includes('政策') || lowerName.includes('条例') || lowerName.includes('准则') || lowerName.includes('法律') || lowerName.includes('规划')) {
-      return 'policy';
-    }
-    if (lowerName.includes('案例') || lowerName.includes('经验') || lowerName.includes('调研') || lowerName.includes('参考材料')) {
-      return 'case';
-    }
-    if (lowerName.includes('模板') || lowerName.includes('样板') || lowerName.includes('范本')) {
-      return 'template';
-    }
-    return 'document';
-  };
-
-  // 5. 计算全新的知识资产中心各项分类数量
-  const stats = React.useMemo(() => {
-    const total = documents.length;
-    let docCount = 0;
-    let factCount = 0;
-    let policyCount = 0;
-    let ruleCount = 0;
-    let caseCount = 0;
-    let templateCount = 0;
-
-    documents.forEach(doc => {
-      const type = getDocumentClassification(doc);
-      if (type === 'document') docCount++;
-      else if (type === 'fact') factCount++;
-      else if (type === 'policy') policyCount++;
-      else if (type === 'department_rule') ruleCount++;
-      else if (type === 'case') caseCount++;
-      else if (type === 'template') templateCount++;
+  const beginEdit = (item: DocumentItem) => {
+    setEditingId(item.id);
+    setEditState({
+      department: item.department ?? "",
+      documentType: (documentTypeOptions.some((type) => type.value === item.document_type) ? item.document_type : "other") as KnowledgeDocumentType,
+      usageTags: safeParseList(item.usage_tags).filter((tag): tag is KnowledgeUsageTag => usageTagOptions.some((option) => option.value === tag)),
+      topicTags: safeParseList(item.topic_tags).join("，"),
+      processingStatus: item.processing_status === "disabled" ? "disabled" : "ready",
+      verificationStatus: item.verification_status,
     });
-
-    return { total, docCount, factCount, policyCount, ruleCount, caseCount, templateCount };
-  }, [documents]);
-
-  // 6. 根据当前 Tab 和搜索条件对列表进行过滤
-  const filteredDocuments = documents.filter((doc) => {
-    const currentName = doc.filename || doc.name || '';
-    const matchesSearch = currentName.toLowerCase().includes(searchQuery.toLowerCase());
-    const docClass = getDocumentClassification(doc);
-    
-    if (activeTab === 'all') {
-      return matchesSearch;
-    }
-    return matchesSearch && docClass === activeTab;
-  });
-
-  const formatSize = (bytes: number) => {
-    if (bytes === 0) return '0 Bytes';
-    const k = 1024;
-    const sizes = ['Bytes', 'KB', 'MB'];
-    const i = Math.floor(Math.log(bytes) / Math.log(k));
-    return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
   };
 
-  return (
-    <div className="space-y-6">
-      <div className="flex justify-between items-center">
-        <div>
-          <h1 className="text-3xl font-bold tracking-tight text-slate-900">知识资产中心</h1>
-          <p className="text-slate-500 mt-1 text-sm">
-            统一沉淀并管理公文写作全周期所需的高价值知识资产、事实指标及规范模板。
-          </p>
-        </div>
-      </div>
+  const saveEdit = async () => {
+    if (!editingId || !editState) return;
+    if (!editState.usageTags.length) { setError("请至少选择一种使用用途"); return; }
+    setSaving(true);
+    setError(null);
+    try {
+      const response = await fetch(`/api/documents/${editingId}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ ...editState, topicTags: normalizeTopicTags(editState.topicTags) }),
+      });
+      const payload: unknown = await response.json();
+      if (!response.ok) throw new Error(parseError(payload, "保存失败"));
+      setEditingId(null);
+      setEditState(null);
+      setNotice("资产分类与审计状态已更新");
+      await fetchDocuments();
+    } catch (caught: unknown) {
+      setError(caught instanceof Error ? caught.message : "保存失败");
+    } finally {
+      setSaving(false);
+    }
+  };
 
-      {/* 顶部指标卡片 - 展示统一后的六大知识分类 */}
-      <div className="grid gap-4 grid-cols-2 md:grid-cols-3 lg:grid-cols-6">
-        <div className="bg-blue-50/50 border border-blue-100 rounded-xl p-4">
-          <div className="flex items-center justify-between">
-            <span className="text-xs font-medium text-blue-800">知识资产总量</span>
-            <svg className="h-4 w-4 text-blue-600" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2">
-              <path strokeLinecap="round" strokeLinejoin="round" d="M4 7v10c0 2.21 3.58 4 8 4s8-1.79 8-4V7M4 7c0 2.21 3.58 4 8 4s8-1.79 8-4M4 7c0-2.21 3.58-4 8-4s8 1.79 8 4m0 5c0 2.21-3.58 4-8 4s-8-1.79-8-4" />
-            </svg>
-          </div>
-          <div className="text-2xl font-bold text-blue-900 mt-2">{stats.total}</div>
-          <p className="text-[10px] text-blue-500 mt-1">全局统一沉淀库</p>
-        </div>
+  const showPreview = async (id: number) => {
+    if (previewId === id) { setPreviewId(null); return; }
+    setPreviewId(id);
+    setPreviewContent("正在读取正文…");
+    try {
+      const response = await fetch(`/api/documents/${id}`);
+      const payload = await response.json() as { content?: string; error?: string };
+      if (!response.ok) throw new Error(payload.error || "正文读取失败");
+      setPreviewContent(payload.content || "未提取到正文");
+    } catch (caught: unknown) {
+      setPreviewContent(caught instanceof Error ? caught.message : "正文读取失败");
+    }
+  };
 
-        <div className="bg-white border border-slate-200 rounded-xl p-4">
-          <div className="flex items-center justify-between">
-            <span className="text-xs font-medium text-slate-600">文档知识数量</span>
-            <svg className="h-4 w-4 text-slate-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2">
-              <path strokeLinecap="round" strokeLinejoin="round" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
-            </svg>
-          </div>
-          <div className="text-2xl font-bold text-slate-800 mt-2">{stats.docCount}</div>
-          <p className="text-[10px] text-slate-400 mt-1">通用素材与语料</p>
-        </div>
+  const deleteDocument = async (item: DocumentItem) => {
+    if (!window.confirm(`确定删除“${item.filename}”吗？原文件、索引和知识记录将一并删除。`)) return;
+    try {
+      const response = await fetch(`/api/documents/${item.id}`, { method: "DELETE" });
+      const payload: unknown = await response.json();
+      if (!response.ok) throw new Error(parseError(payload, "删除失败"));
+      setNotice("知识资产已删除");
+      await fetchDocuments();
+    } catch (caught: unknown) {
+      setError(caught instanceof Error ? caught.message : "删除失败");
+    }
+  };
 
-        <div className="bg-white border border-slate-200 rounded-xl p-4">
-          <div className="flex items-center justify-between">
-            <span className="text-xs font-medium text-slate-600">事实知识数量</span>
-            <svg className="h-4 w-4 text-emerald-500" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2">
-              <path strokeLinecap="round" strokeLinejoin="round" d="M13 7h8m0 0v8m0-8l-8 8-4-4-6 6" />
-            </svg>
-          </div>
-          <div className="text-2xl font-bold text-slate-800 mt-2">{stats.factCount}</div>
-          <p className="text-[10px] text-slate-400 mt-1">核心统计与数据指标</p>
-        </div>
+  return <div className="space-y-6">
+    <header>
+      <p className="text-xs font-bold tracking-widest text-teal-700">知识资产中心</p>
+      <h1 className="mt-2 text-3xl font-extrabold tracking-tight text-slate-900">让每份历史材料都能被准确检索和审计</h1>
+      <p className="mt-2 text-sm text-slate-500">按文种管理材料，用多用途标签决定 AI 如何使用，并保留来源、核验和向量化状态。</p>
+    </header>
 
-        <div className="bg-white border border-slate-200 rounded-xl p-4">
-          <div className="flex items-center justify-between">
-            <span className="text-xs font-medium text-slate-600">政策知识数量</span>
-            <svg className="h-4 w-4 text-purple-500" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2">
-              <path strokeLinecap="round" strokeLinejoin="round" d="M12 6.253v13m0-13C10.832 5.477 9.246 5 7.5 5S4.168 5.477 3 6.253v13C4.168 18.477 5.754 18 7.5 18s3.332.477 4.5 1.253m0-13C13.168 5.477 14.754 5 16.5 5c1.747 0 3.332.477 4.5 1.253v13C19.832 18.477 18.247 18 16.5 18c-1.746 0-3.332.477-4.5 1.253" />
-            </svg>
-          </div>
-          <div className="text-2xl font-bold text-slate-800 mt-2">{stats.policyCount}</div>
-          <p className="text-[10px] text-slate-400 mt-1">政策、法律与规划准则</p>
-        </div>
+    {(notice || error) && <div className={`rounded border px-4 py-3 text-sm ${error ? "border-red-200 bg-red-50 text-red-700" : "border-emerald-200 bg-emerald-50 text-emerald-700"}`}>{error || notice}</div>}
 
-        <div className="bg-white border border-slate-200 rounded-xl p-4">
-          <div className="flex items-center justify-between">
-            <span className="text-xs font-medium text-slate-600">治理规则数量</span>
-            <svg className="h-4 w-4 text-amber-500" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2">
-              <path strokeLinecap="round" strokeLinejoin="round" d="M9 12l2 2 4-4m5.618-4.016A11.955 11.955 0 0112 2.944a11.955 11.955 0 01-8.618 3.04A12.02 12.02 0 003 9c0 5.591 3.824 10.29 9 11.622 5.176-1.332 9-6.03 9-11.622 0-1.042-.133-2.052-.382-3.016z" />
-            </svg>
-          </div>
-          <div className="text-2xl font-bold text-slate-800 mt-2">{stats.ruleCount}</div>
-          <p className="text-[10px] text-slate-400 mt-1">职责规范与定岗条例</p>
-        </div>
+    <section className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+      {[
+        ["资产总量", stats.total, "D1 元数据 + R2 原文件"],
+        ["可用于写作", stats.ready, "已完成正文解析"],
+        ["已人工核验", stats.verified, "可作为严格引用来源"],
+        ["待向量化", stats.vectorPending, "仍可使用关键词检索"],
+      ].map(([label, value, hint]) => <div key={String(label)} className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
+        <p className="text-xs font-semibold text-slate-500">{label}</p><p className="mt-2 text-2xl font-extrabold text-slate-900">{value}</p><p className="mt-1 text-[11px] text-slate-400">{hint}</p>
+      </div>)}
+    </section>
 
-        <div className="bg-white border border-slate-200 rounded-xl p-4">
-          <div className="flex items-center justify-between">
-            <span className="text-xs font-medium text-slate-600">模板数量</span>
-            <svg className="h-4 w-4 text-indigo-500" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2">
-              <path strokeLinecap="round" strokeLinejoin="round" d="M4 5a1 1 0 011-1h14a1 1 0 011 1v2a1 1 0 01-1 1H5a1 1 0 01-1-1V5zM4 13a1 1 0 011-1h6a1 1 0 011 1v6a1 1 0 01-1 1H5a1 1 0 01-1-1v-6zM16 13a1 1 0 011-1h2a1 1 0 011 1v6a1 1 0 01-1 1h-2a1 1 0 01-1-1v-6z" />
-            </svg>
-          </div>
-          <div className="text-2xl font-bold text-slate-800 mt-2">{stats.templateCount}</div>
-          <p className="text-[10px] text-slate-400 mt-1">公文标准写作模板</p>
-        </div>
-      </div>
+    <div className="grid gap-6 xl:grid-cols-[340px_1fr]">
+      <section className="h-fit rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
+        <h2 className="text-lg font-bold text-slate-900">录入参考公文</h2>
+        <p className="mt-1 text-xs leading-5 text-slate-500">仅支持 DOCX，单文件不超过 8MB。文种和用途可自动识别，也可人工指定。</p>
+        <form onSubmit={handleUpload} className="mt-5 space-y-4">
+          <div><label className="text-xs font-semibold text-slate-700" htmlFor="knowledge-file">选择文件</label><input id="knowledge-file" type="file" accept=".docx" required onChange={(event) => setSelectedFile(event.target.files?.[0] ?? null)} className="mt-1 block w-full rounded-lg border border-slate-200 bg-slate-50 text-xs file:mr-3 file:border-0 file:bg-teal-50 file:px-3 file:py-2.5 file:font-semibold file:text-teal-800" /></div>
+          <div><label className="text-xs font-semibold text-slate-700" htmlFor="department">归属处室</label><input id="department" autoComplete="organization" value={department} onChange={(event) => setDepartment(event.target.value)} placeholder="例如：城建处" className="mt-1 w-full rounded-lg border border-slate-200 p-2.5 text-xs outline-none focus:border-teal-600" /></div>
+          <div><label className="text-xs font-semibold text-slate-700" htmlFor="document-type">材料文种</label><select id="document-type" value={documentType} onChange={(event) => setDocumentType(event.target.value as KnowledgeDocumentType | "auto")} className="mt-1 w-full rounded-lg border border-slate-200 bg-white p-2.5 text-xs"><option value="auto">自动识别（推荐）</option>{documentTypeOptions.map((item) => <option key={item.value} value={item.value}>{item.label}</option>)}</select></div>
+          <fieldset><legend className="text-xs font-semibold text-slate-700">使用用途（可多选）</legend><div className="mt-2 grid grid-cols-2 gap-2">{usageTagOptions.map((item) => <label key={item.value} className="flex items-center gap-2 rounded border border-slate-100 px-2 py-2 text-[11px] text-slate-600"><input type="checkbox" checked={usageTags.includes(item.value)} onChange={() => toggleUploadUsage(item.value)} />{item.label}</label>)}</div><p className="mt-1 text-[10px] text-slate-400">未选择时由系统根据正文自动判断。</p></fieldset>
+          <div><label className="text-xs font-semibold text-slate-700" htmlFor="topic-tags">主题标签</label><input id="topic-tags" autoComplete="off" value={topicTags} onChange={(event) => setTopicTags(event.target.value)} placeholder="综合管廊，城市建设，2026年" className="mt-1 w-full rounded-lg border border-slate-200 p-2.5 text-xs outline-none focus:border-teal-600" /></div>
+          <button type="submit" disabled={!selectedFile || uploading} className="w-full rounded bg-teal-800 px-4 py-2.5 text-xs font-bold text-white disabled:cursor-not-allowed disabled:bg-slate-200 disabled:text-slate-400">{uploading ? "正在解析并入库…" : "录入知识资产"}</button>
+        </form>
+      </section>
 
-      <div className="grid gap-6 md:grid-cols-4">
-        {/* 左侧：资产快速录入 */}
-        <div className="md:col-span-1 bg-white border border-slate-200 rounded-xl p-5 shadow-sm h-fit">
-          <h2 className="text-lg font-bold text-slate-900 flex items-center gap-2 mb-4">
-            <svg className="h-5 w-5 text-blue-600" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2">
-              <path strokeLinecap="round" strokeLinejoin="round" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l-4-4m0 0L8 8m4-4v12" />
-            </svg>
-            资产快速入库
-          </h2>
-          
-          <form onSubmit={handleUpload} className="space-y-4">
-            <div className="space-y-1">
-              <label htmlFor="file-upload" className="text-xs font-semibold text-slate-700">选择文件</label>
-              <input
-                id="file-upload"
-                type="file"
-                accept=".docx"
-                onChange={(e: React.ChangeEvent<HTMLInputElement>) => setSelectedFile(e.target.files?.[0] || null)}
-                className="block w-full text-xs text-slate-500 border border-slate-200 rounded-lg cursor-pointer bg-slate-50 focus:outline-none file:mr-2 file:py-2 file:px-3 file:rounded-l-lg file:border-0 file:text-xs file:font-semibold file:bg-blue-50 file:text-blue-700 hover:file:bg-blue-100"
-                required
-              />
-              <p className="text-[10px] text-slate-400">支持 PDF, Word, Excel, TXT 等格式。</p>
-            </div>
-
-            <div className="space-y-1">
-              <label htmlFor="department" className="text-xs font-semibold text-slate-700">归属处室</label>
-              <input
-                id="department"
-                type="text"
-                autoComplete="organization"
-                value={department}
-                onChange={(e: React.ChangeEvent<HTMLInputElement>) => setDepartment(e.target.value)}
-                placeholder="例如：城建处"
-                className="w-full text-xs border border-slate-200 rounded-lg p-2.5 focus:outline-none focus:ring-1 focus:ring-blue-500 bg-white"
-                required
-              />
-            </div>
-
-            <div className="space-y-1">
-              <label htmlFor="classification" className="text-xs font-semibold text-slate-700">资产分类</label>
-              <select
-                id="classification"
-                value={classification}
-                onChange={(e: React.ChangeEvent<HTMLSelectElement>) => setClassification(e.target.value)}
-                className="w-full text-xs border border-slate-200 rounded-lg p-2.5 focus:outline-none focus:ring-1 focus:ring-blue-500 bg-white"
-              >
-                <option value="document">通用参考语料 (document)</option>
-                <option value="fact">事实数据指标 (fact)</option>
-                <option value="policy">政策法律准则 (policy)</option>
-                <option value="department_rule">治理规则/职责 (department_rule)</option>
-                <option value="case">实践案例 (case)</option>
-                <option value="template">标准写作模板 (template)</option>
-              </select>
-            </div>
-
-            <button
-              type="submit"
-              disabled={uploading || !selectedFile}
-              className="w-full bg-blue-600 text-white rounded-lg py-2 text-xs font-medium hover:bg-blue-700 transition-all disabled:bg-slate-200 disabled:text-slate-400 flex items-center justify-center gap-2"
-            >
-              {uploading ? (
-                <>
-                  <svg className="animate-spin h-3.5 w-3.5" viewBox="0 0 24 24" fill="none">
-                    <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
-                    <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z" />
-                  </svg>
-                  正在智能提取中...
-                </>
-              ) : (
-                '录入知识资产'
-              )}
-            </button>
-          </form>
+      <section className="min-w-0 rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
+        <div className="flex flex-col gap-3 border-b border-slate-100 pb-4 lg:flex-row lg:items-center lg:justify-between"><div><h2 className="text-lg font-bold text-slate-900">资产仓库</h2><p className="mt-1 text-xs text-slate-400">共显示 {filteredDocuments.length} 份材料</p></div><input value={query} onChange={(event) => setQuery(event.target.value)} autoComplete="off" placeholder="检索文件名、处室或标签" className="w-full rounded-lg border border-slate-200 px-3 py-2.5 text-xs outline-none focus:border-teal-600 lg:w-72" /></div>
+        <div className="grid gap-2 py-4 sm:grid-cols-3">
+          <select aria-label="按文种筛选" value={typeFilter} onChange={(event) => setTypeFilter(event.target.value)} className="rounded-lg border border-slate-200 bg-white p-2 text-xs"><option value="all">全部文种</option>{documentTypeOptions.map((item) => <option key={item.value} value={item.value}>{item.label}（{stats.types[item.value] ?? 0}）</option>)}</select>
+          <select aria-label="按用途筛选" value={usageFilter} onChange={(event) => setUsageFilter(event.target.value)} className="rounded-lg border border-slate-200 bg-white p-2 text-xs"><option value="all">全部用途</option>{usageTagOptions.map((item) => <option key={item.value} value={item.value}>{item.label}</option>)}</select>
+          <select aria-label="按状态筛选" value={statusFilter} onChange={(event) => setStatusFilter(event.target.value)} className="rounded-lg border border-slate-200 bg-white p-2 text-xs"><option value="all">全部状态</option><option value="ready">可用于写作</option><option value="disabled">已停用</option><option value="failed">处理失败</option></select>
         </div>
 
-        {/* 右侧：统一资产仓库清单 */}
-        <div className="md:col-span-3 bg-white border border-slate-200 rounded-xl p-5 shadow-sm">
-          <div className="flex flex-col sm:flex-row justify-between sm:items-center gap-4 border-b border-slate-100 pb-4 mb-4">
-            <h2 className="text-lg font-bold text-slate-900">资产仓库清单</h2>
-            <div className="relative w-full sm:w-72">
-              <input
-                type="text"
-                autoComplete="off"
-                placeholder="在库中检索高价值知识资产..."
-                value={searchQuery}
-                onChange={(e: React.ChangeEvent<HTMLInputElement>) => setSearchQuery(e.target.value)}
-                className="w-full text-xs border border-slate-200 rounded-lg py-2 pl-8 pr-3 focus:outline-none focus:ring-1 focus:ring-blue-500"
-              />
-              <svg className="absolute left-2.5 top-2.5 h-3.5 w-3.5 text-slate-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2">
-                <path strokeLinecap="round" strokeLinejoin="round" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
-              </svg>
-            </div>
-          </div>
-
-          {/* 自研的高质感 Tab */}
-          <div className="flex flex-wrap border-b border-slate-100 mb-4 gap-1">
-            <button
-              onClick={() => setActiveTab('all')}
-              className={`px-4 py-2 text-xs font-semibold rounded-t-lg border-b-2 transition-all ${
-                activeTab === 'all'
-                  ? 'border-blue-600 text-blue-600 bg-blue-50/20'
-                  : 'border-transparent text-slate-500 hover:text-slate-800'
-              }`}
-            >
-              全部资产 ({stats.total})
-            </button>
-            <button
-              onClick={() => setActiveTab('document')}
-              className={`px-4 py-2 text-xs font-semibold rounded-t-lg border-b-2 transition-all ${
-                activeTab === 'document'
-                  ? 'border-blue-600 text-blue-600 bg-blue-50/20'
-                  : 'border-transparent text-slate-500 hover:text-slate-800'
-              }`}
-            >
-              文档语料 ({stats.docCount})
-            </button>
-            <button
-              onClick={() => setActiveTab('fact')}
-              className={`px-4 py-2 text-xs font-semibold rounded-t-lg border-b-2 transition-all ${
-                activeTab === 'fact'
-                  ? 'border-blue-600 text-blue-600 bg-blue-50/20'
-                  : 'border-transparent text-slate-500 hover:text-slate-800'
-              }`}
-            >
-              事实数据 ({stats.factCount})
-            </button>
-            <button
-              onClick={() => setActiveTab('policy')}
-              className={`px-4 py-2 text-xs font-semibold rounded-t-lg border-b-2 transition-all ${
-                activeTab === 'policy'
-                  ? 'border-blue-600 text-blue-600 bg-blue-50/20'
-                  : 'border-transparent text-slate-500 hover:text-slate-800'
-              }`}
-            >
-              政策法规 ({stats.policyCount})
-            </button>
-            <button
-              onClick={() => setActiveTab('department_rule')}
-              className={`px-4 py-2 text-xs font-semibold rounded-t-lg border-b-2 transition-all ${
-                activeTab === 'department_rule'
-                  ? 'border-blue-600 text-blue-600 bg-blue-50/20'
-                  : 'border-transparent text-slate-500 hover:text-slate-800'
-              }`}
-            >
-              治理规则 ({stats.ruleCount})
-            </button>
-            <button
-              onClick={() => setActiveTab('case')}
-              className={`px-4 py-2 text-xs font-semibold rounded-t-lg border-b-2 transition-all ${
-                activeTab === 'case'
-                  ? 'border-blue-600 text-blue-600 bg-blue-50/20'
-                  : 'border-transparent text-slate-500 hover:text-slate-800'
-              }`}
-            >
-              实践案例 ({stats.caseCount})
-            </button>
-            <button
-              onClick={() => setActiveTab('template')}
-              className={`px-4 py-2 text-xs font-semibold rounded-t-lg border-b-2 transition-all ${
-                activeTab === 'template'
-                  ? 'border-blue-600 text-blue-600 bg-blue-50/20'
-                  : 'border-transparent text-slate-500 hover:text-slate-800'
-              }`}
-            >
-              标准模板 ({stats.templateCount})
-            </button>
-          </div>
-
-          {/* 列表渲染区 */}
-          <div>
-            {loading ? (
-              <div className="flex justify-center items-center py-16 gap-2">
-                <svg className="animate-spin h-5 w-5 text-blue-600" viewBox="0 0 24 24" fill="none">
-                  <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
-                  <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z" />
-                </svg>
-                <span className="text-xs text-slate-500">正在加载高品质知识库...</span>
+        {loading ? <p className="py-16 text-center text-xs text-slate-400">正在加载知识资产…</p> : filteredDocuments.length === 0 ? <p className="rounded-xl border border-dashed border-slate-200 py-16 text-center text-xs text-slate-400">当前筛选条件下没有知识资产</p> : <div className="space-y-3">
+          {filteredDocuments.map((item) => {
+            const itemUsageTags = safeParseList(item.usage_tags);
+            const itemTopicTags = safeParseList(item.topic_tags);
+            const status = statusMeta[item.processing_status] ?? statusMeta.ready;
+            const editing = editingId === item.id && editState;
+            return <article key={item.id} className="rounded-xl border border-slate-200 p-4 transition hover:border-teal-200">
+              <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+                <div className="min-w-0"><div className="flex flex-wrap items-center gap-2"><h3 className="break-all text-sm font-bold text-slate-800">{item.filename}</h3><span className="rounded bg-teal-50 px-2 py-0.5 text-[10px] font-semibold text-teal-800">{documentTypeLabel(item.document_type)}</span><span className={`rounded px-2 py-0.5 text-[10px] font-semibold ${status.className}`}>{status.label}</span>{item.verification_status === "verified" && <span className="rounded bg-blue-50 px-2 py-0.5 text-[10px] font-semibold text-blue-700">已核验</span>}</div>
+                  <p className="mt-2 text-[11px] text-slate-400">{formatSize(item.file_size)}　·　{item.department || "未分类"}　·　{new Date(item.created_at).toLocaleDateString("zh-CN")}　·　{item.vector_status === "ready" ? "向量已就绪" : item.vector_status === "failed" ? "向量化失败" : "待向量化"}</p>
+                  <div className="mt-2 flex flex-wrap gap-1.5">{itemUsageTags.map((tag) => <span key={tag} className="rounded bg-slate-100 px-2 py-1 text-[10px] text-slate-600">{usageTagLabel(tag)}</span>)}{itemTopicTags.map((tag) => <span key={tag} className="rounded border border-slate-200 px-2 py-1 text-[10px] text-slate-500">#{tag}</span>)}</div>
+                </div>
+                <div className="flex shrink-0 gap-2"><button type="button" onClick={() => void showPreview(item.id)} className="rounded border border-slate-200 px-3 py-1.5 text-[11px] text-slate-600 hover:bg-slate-50">{previewId === item.id ? "收起" : "预览"}</button><button type="button" onClick={() => beginEdit(item)} className="rounded border border-slate-200 px-3 py-1.5 text-[11px] text-slate-600 hover:bg-slate-50">编辑</button><button type="button" onClick={() => void deleteDocument(item)} className="rounded border border-red-100 px-3 py-1.5 text-[11px] text-red-600 hover:bg-red-50">删除</button></div>
               </div>
-            ) : filteredDocuments.length === 0 ? (
-              <div className="text-center py-16 border border-dashed border-slate-200 rounded-xl bg-slate-50/50">
-                <svg className="h-8 w-8 text-slate-300 mx-auto mb-2" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2">
-                  <path strokeLinecap="round" strokeLinejoin="round" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
-                </svg>
-                <p className="text-xs text-slate-400">该分类下尚未检索到有效高价值资产，请录入新知识。</p>
-              </div>
-            ) : (
-              <div className="max-h-120 overflow-y-auto pr-1 space-y-2.5">
-                {filteredDocuments.map((doc) => {
-                  const currentType = getDocumentClassification(doc);
-                  const currentName = doc.filename || doc.name || '未命名资产';
-                  return (
-                    <div
-                      key={doc.id}
-                      className="flex items-center justify-between p-3.5 border border-slate-100 rounded-xl hover:bg-slate-50/50 transition-colors"
-                    >
-                      <div className="flex items-center space-x-3.5 min-w-0 flex-1">
-                        {currentType === 'fact' ? (
-                          <span className="p-2.5 bg-emerald-50 text-emerald-600 rounded-lg shrink-0">
-                            <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2">
-                              <path strokeLinecap="round" strokeLinejoin="round" d="M13 7h8m0 0v8m0-8l-8 8-4-4-6 6" />
-                            </svg>
-                          </span>
-                        ) : currentType === 'department_rule' ? (
-                          <span className="p-2.5 bg-amber-50 text-amber-600 rounded-lg shrink-0">
-                            <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2">
-                              <path strokeLinecap="round" strokeLinejoin="round" d="M9 12l2 2 4-4m5.618-4.016A11.955 11.955 0 0112 2.944a11.955 11.955 0 01-8.618 3.04A12.02 12.02 0 003 9c0 5.591 3.824 10.29 9 11.622 5.176-1.332 9-6.03 9-11.622 0-1.042-.133-2.052-.382-3.016z" />
-                            </svg>
-                          </span>
-                        ) : currentType === 'policy' ? (
-                          <span className="p-2.5 bg-purple-50 text-purple-600 rounded-lg shrink-0">
-                            <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2">
-                              <path strokeLinecap="round" strokeLinejoin="round" d="M12 6.253v13m0-13C10.832 5.477 9.246 5 7.5 5S4.168 5.477 3 6.253v13C4.168 18.477 5.754 18 7.5 18s3.332.477 4.5 1.253m0-13C13.168 5.477 14.754 5 16.5 5c1.747 0 3.332.477 4.5 1.253v13C19.832 18.477 18.247 18 16.5 18c-1.746 0-3.332.477-4.5 1.253" />
-                            </svg>
-                          </span>
-                        ) : currentType === 'case' ? (
-                          <span className="p-2.5 bg-blue-50 text-blue-600 rounded-lg shrink-0">
-                            <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2">
-                              <path strokeLinecap="round" strokeLinejoin="round" d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z" />
-                            </svg>
-                          </span>
-                        ) : currentType === 'template' ? (
-                          <span className="p-2.5 bg-indigo-50 text-indigo-600 rounded-lg shrink-0">
-                            <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2">
-                              <path strokeLinecap="round" strokeLinejoin="round" d="M4 5a1 1 0 011-1h14a1 1 0 011 1v2a1 1 0 01-1 1H5a1 1 0 01-1-1V5zM4 13a1 1 0 011-1h6a1 1 0 011 1v6a1 1 0 01-1 1H5a1 1 0 01-1-1v-6zM16 13a1 1 0 011-1h2a1 1 0 011 1v6a1 1 0 01-1 1h-2a1 1 0 01-1-1v-6z" />
-                            </svg>
-                          </span>
-                        ) : (
-                          <span className="p-2.5 bg-blue-50 text-blue-600 rounded-lg shrink-0">
-                            <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2">
-                              <path strokeLinecap="round" strokeLinejoin="round" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
-                            </svg>
-                          </span>
-                        )}
-                        
-                        <div className="min-w-0 flex-1">
-                          <div className="flex items-center gap-2">
-                            <p className="font-semibold text-slate-800 text-xs sm:text-sm truncate">{currentName}</p>
-                            <span className="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-medium bg-slate-100 text-slate-800 uppercase shrink-0">
-                              {currentType === 'fact' && '事实数据'}
-                              {currentType === 'department_rule' && '治理规则'}
-                              {currentType === 'policy' && '政策准则'}
-                              {currentType === 'case' && '实践案例'}
-                              {currentType === 'template' && '标准模板'}
-                              {currentType === 'document' && '参考语料'}
-                            </span>
-                          </div>
-                          <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-[10px] text-slate-400 mt-1">
-                            <span>大小: {formatSize(doc.size)}</span>
-                            <span>•</span>
-                            <span>处室: {doc.department || '未分配'}</span>
-                            <span>•</span>
-                            <span>录入时间: {new Date(doc.created_at).toLocaleDateString()}</span>
-                          </div>
-                        </div>
-                      </div>
-                      
-                      <button
-                        type="button"
-                        onClick={() => handleDelete(doc.id)}
-                        className="text-slate-400 hover:text-red-500 hover:bg-red-50 p-2 rounded-lg transition-all shrink-0 ml-2"
-                      >
-                        <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2">
-                          <path strokeLinecap="round" strokeLinejoin="round" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
-                        </svg>
-                      </button>
-                    </div>
-                  );
-                })}
-              </div>
-            )}
-          </div>
-        </div>
-      </div>
+              {previewId === item.id && <div className="mt-4 max-h-72 overflow-y-auto whitespace-pre-wrap rounded-lg border border-slate-100 bg-slate-50 p-4 text-xs leading-6 text-slate-600">{previewContent}</div>}
+              {editing && <div className="mt-4 grid gap-3 rounded-lg border border-teal-100 bg-teal-50/30 p-4 md:grid-cols-2">
+                <input aria-label="归属处室" value={editState.department} onChange={(event) => setEditState({ ...editState, department: event.target.value })} className="rounded border border-slate-200 p-2 text-xs" />
+                <select aria-label="材料文种" value={editState.documentType} onChange={(event) => setEditState({ ...editState, documentType: event.target.value as KnowledgeDocumentType })} className="rounded border border-slate-200 bg-white p-2 text-xs">{documentTypeOptions.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}</select>
+                <input aria-label="主题标签" value={editState.topicTags} onChange={(event) => setEditState({ ...editState, topicTags: event.target.value })} placeholder="主题标签，以逗号分隔" className="rounded border border-slate-200 p-2 text-xs" />
+                <div className="flex gap-2"><select aria-label="使用状态" value={editState.processingStatus} onChange={(event) => setEditState({ ...editState, processingStatus: event.target.value as "ready" | "disabled" })} className="min-w-0 flex-1 rounded border border-slate-200 bg-white p-2 text-xs"><option value="ready">可用于写作</option><option value="disabled">停用</option></select><select aria-label="核验状态" value={editState.verificationStatus} onChange={(event) => setEditState({ ...editState, verificationStatus: event.target.value as "verified" | "unverified" })} className="min-w-0 flex-1 rounded border border-slate-200 bg-white p-2 text-xs"><option value="unverified">未核验</option><option value="verified">已核验</option></select></div>
+                <fieldset className="md:col-span-2"><legend className="text-[11px] font-semibold text-slate-600">使用用途</legend><div className="mt-2 flex flex-wrap gap-2">{usageTagOptions.map((option) => <label key={option.value} className="flex items-center gap-1.5 rounded border border-slate-200 bg-white px-2 py-1.5 text-[11px]"><input type="checkbox" checked={editState.usageTags.includes(option.value)} onChange={() => setEditState({ ...editState, usageTags: editState.usageTags.includes(option.value) ? editState.usageTags.filter((value) => value !== option.value) : [...editState.usageTags, option.value] })} />{option.label}</label>)}</div></fieldset>
+                <div className="flex gap-2 md:col-span-2"><button type="button" onClick={() => void saveEdit()} disabled={saving} className="rounded bg-teal-800 px-4 py-2 text-xs font-semibold text-white disabled:opacity-50">{saving ? "保存中…" : "保存修改"}</button><button type="button" onClick={() => { setEditingId(null); setEditState(null); }} className="rounded border border-slate-200 bg-white px-4 py-2 text-xs text-slate-600">取消</button></div>
+              </div>}
+            </article>;
+          })}
+        </div>}
+      </section>
     </div>
-  );
+  </div>;
 }

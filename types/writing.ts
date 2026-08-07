@@ -1,4 +1,4 @@
-export type DocumentType = "工作总结" | "工作报告" | "实施方案" | "行动计划" | "调研报告" | "情况汇报";
+export type DocumentType = "工作报告" | "情况汇报" | "实施方案" | "调研报告" | "领导讲话稿";
 
 export interface WritingTask {
   title: string;
@@ -15,7 +15,7 @@ export interface WritingAnalysis {
   recommendedStructure: string[];
   keywords: string[];
   riskPoints: string[];
-  knowledgeRequirement: Array<"document" | "fact" | "policy" | "department_rule" | "template">;
+  knowledgeRequirement: Array<"structure" | "wording" | "facts" | "policy" | "case" | "format">;
 }
 
 export interface WritingContext {

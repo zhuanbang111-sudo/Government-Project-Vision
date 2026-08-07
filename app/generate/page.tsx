@@ -3,13 +3,17 @@
 import React, { useState, useRef, useEffect } from "react";
 import Link from "next/link";
 import { theme } from "../ui-config";
+import { documentTypeLabel, safeParseList, usageTagLabel } from "../knowledge";
 import type { WritingAnalysis, WritingTask } from "../../types/writing";
 
 interface DocReference {
   id: number;
   filename: string;
   department: string;
-  doc_type: string;
+  documentType: string;
+  usageTags: string;
+  verificationStatus: string;
+  matchReasons: string[];
   score: number;
 }
 
@@ -32,6 +36,7 @@ export default function GuidedGeneratePage() {
   const [topic, setTopic] = useState("");
   const [task, setTask] = useState<WritingTask>({ title: "", documentType: "工作报告", department: "", audience: "", purpose: "", timeRange: "", focus: "" });
   const [analysis, setAnalysis] = useState<WritingAnalysis | null>(null);
+  const [confirmedOutline, setConfirmedOutline] = useState<string[]>([]);
   const [recommendedDocs, setRecommendedDocs] = useState<DocReference[]>([]);
   const [selectedIds, setSelectedIds] = useState<number[]>([]);
   const [points, setPoints] = useState("");
@@ -77,12 +82,12 @@ export default function GuidedGeneratePage() {
       const res = await fetch("/api/search", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ query: keyword }),
+        body: JSON.stringify({ query: keyword, documentType: task.documentType }),
       });
       const data: unknown = await res.json();
       if (!res.ok || !Array.isArray(data)) throw new Error((data as { error?: string })?.error || "检索发生故障");
       setRecommendedDocs(data);
-      const autoChecked = data.filter((item: DocReference) => item.score >= 0.6).map((item: DocReference) => item.id);
+      const autoChecked = data.slice(0, 4).map((item: DocReference) => item.id);
       setSelectedIds(autoChecked);
     } catch (err: unknown) {
       setError(err instanceof Error ? err.message : "请求失败");
@@ -96,11 +101,14 @@ export default function GuidedGeneratePage() {
     if (!task.title.trim() || !task.department.trim() || !task.purpose.trim() || selectedParagraphs.length === 0) return;
     setLoading(true);
     setError(null);
+    let recommendationQuery = `${task.documentType} ${task.title} ${task.department}`;
     try {
       const response = await fetch("/api/writing-analysis", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(task) });
       const data = await response.json();
       if (!response.ok) throw new Error(data.error || "任务分析失败");
       setAnalysis(data as WritingAnalysis);
+      setConfirmedOutline((data as WritingAnalysis).recommendedStructure);
+      recommendationQuery = `${recommendationQuery} ${(data as WritingAnalysis).keywords.join(" ")}`;
       setTopic(task.title);
       setStep(2);
     } catch (err: unknown) {
@@ -108,11 +116,21 @@ export default function GuidedGeneratePage() {
       return;
     } finally { setLoading(false); }
     // 使用第一个勾选的段落和主题进行首轮语意检索推荐
-    await triggerSemanticRecommendation(`${selectedParagraphs[0].name}关于${topic}`);
+    await triggerSemanticRecommendation(recommendationQuery);
   };
 
   const handleToggleDoc = (id: number) => {
     setSelectedIds((prev) => prev.includes(id) ? prev.filter((item) => item !== id) : [...prev, id]);
+  };
+
+  const moveOutline = (index: number, direction: "up" | "down") => {
+    setConfirmedOutline((current) => {
+      const target = direction === "up" ? index - 1 : index + 1;
+      if (target < 0 || target >= current.length) return current;
+      const next = [...current];
+      [next[index], next[target]] = [next[target], next[index]];
+      return next;
+    });
   };
 
   const handleManualSearch = async (e: React.FormEvent) => {
@@ -128,6 +146,11 @@ export default function GuidedGeneratePage() {
     setLoading(true);
     setError(null);
     try {
+      const confirmedParagraphs = confirmedOutline.map((name, index) => ({
+        id: index + 1,
+        name,
+        description: "严格按照用户确认的本节标题和逻辑展开",
+      }));
       // 提交到 v3 接口：分段处理 + 整体润色
       const contextualPoints = [
         `文种：${task.documentType}`,
@@ -142,7 +165,15 @@ export default function GuidedGeneratePage() {
       const res = await fetch("/api/generate-v3", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ topic, selectedParagraphs, points: contextualPoints, newData, selectedIds }),
+        body: JSON.stringify({
+          topic,
+          selectedParagraphs: confirmedParagraphs,
+          points: contextualPoints,
+          newData,
+          selectedIds,
+          documentType: task.documentType,
+          knowledgeRequirements: analysis?.knowledgeRequirement ?? [],
+        }),
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || "AI 分段起草失败");
@@ -315,7 +346,7 @@ export default function GuidedGeneratePage() {
           <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
             <input required autoComplete="off" placeholder="材料标题" value={task.title} onChange={(e) => { setTask((current) => ({ ...current, title: e.target.value })); setTopic(e.target.value); }} className={theme.input} />
             <select value={task.documentType} onChange={(e) => setTask((current) => ({ ...current, documentType: e.target.value as WritingTask["documentType"] }))} className={theme.input}>
-              {(["工作总结", "工作报告", "实施方案", "行动计划", "调研报告", "情况汇报"] as const).map((type) => <option key={type}>{type}</option>)}
+              {(["工作报告", "情况汇报", "实施方案", "调研报告", "领导讲话稿"] as const).map((type) => <option key={type}>{type}</option>)}
             </select>
             <input required autoComplete="organization" placeholder="牵头部门" value={task.department} onChange={(e) => setTask((current) => ({ ...current, department: e.target.value }))} className={theme.input} />
             <input autoComplete="off" placeholder="报送对象" value={task.audience} onChange={(e) => setTask((current) => ({ ...current, audience: e.target.value }))} className={theme.input} />
@@ -400,6 +431,21 @@ export default function GuidedGeneratePage() {
               </div>
             </section>
           )}
+          <section className="rounded border border-slate-200 bg-white p-4">
+            <div className="flex items-center justify-between">
+              <div><h3 className="text-sm font-bold text-slate-800">确认完整提纲</h3><p className="mt-1 text-[11px] text-slate-400">生成时将严格按照这里确认的章节顺序起草。</p></div>
+              <button type="button" onClick={() => setConfirmedOutline((current) => [...current, "新增章节"])} className="rounded border border-slate-200 px-3 py-1.5 text-[11px] text-slate-600">添加章节</button>
+            </div>
+            <div className="mt-3 space-y-2">
+              {confirmedOutline.map((item, index) => <div key={`${index}-${item}`} className="flex items-center gap-2">
+                <span className="w-6 text-center text-xs font-bold text-teal-800">{index + 1}</span>
+                <input value={item} onChange={(event) => setConfirmedOutline((current) => current.map((value, itemIndex) => itemIndex === index ? event.target.value : value))} className="min-w-0 flex-1 rounded border border-slate-200 px-3 py-2 text-xs outline-none focus:border-teal-600" />
+                <button type="button" disabled={index === 0} onClick={() => moveOutline(index, "up")} className="rounded border border-slate-200 px-2 py-1.5 text-[10px] disabled:opacity-30">上移</button>
+                <button type="button" disabled={index === confirmedOutline.length - 1} onClick={() => moveOutline(index, "down")} className="rounded border border-slate-200 px-2 py-1.5 text-[10px] disabled:opacity-30">下移</button>
+                <button type="button" onClick={() => setConfirmedOutline((current) => current.filter((_, itemIndex) => itemIndex !== index))} className="rounded border border-red-100 px-2 py-1.5 text-[10px] text-red-600">删除</button>
+              </div>)}
+            </div>
+          </section>
           <h3 className={theme.sectionTitle}>第2步：选择深度参考语料</h3>
           <div className="space-y-3">
             <p className="text-xs text-slate-500">已自动推荐高度相关的历史公文。勾选您希望参考和模仿风格的文档：</p>
@@ -420,7 +466,10 @@ export default function GuidedGeneratePage() {
                       <div className="col-span-1 text-center">
                         <input type="checkbox" checked={selectedIds.includes(doc.id)} onChange={() => handleToggleDoc(doc.id)} />
                       </div>
-                      <div className="col-span-8 font-semibold text-slate-800 truncate" title={doc.filename}>{doc.filename}</div>
+                      <div className="col-span-8 min-w-0" title={doc.filename}>
+                        <p className="truncate font-semibold text-slate-800">{doc.filename}</p>
+                        <p className="mt-1 truncate text-[10px] font-normal text-slate-400">{documentTypeLabel(doc.documentType)} · {safeParseList(doc.usageTags).map(usageTagLabel).join("、") || "通用参考"} · {doc.verificationStatus === "verified" ? "已核验" : "未核验"}</p>
+                      </div>
                       <div className="col-span-3 text-right text-[10px] text-blue-600 font-bold">{Math.round(doc.score * 100)}%</div>
                     </label>
                   ))}
@@ -439,7 +488,7 @@ export default function GuidedGeneratePage() {
           </div>
           <div className="flex justify-between border-t pt-4">
             <button onClick={() => setStep(1)} className={theme.secondaryBtn}>上一步</button>
-            <button onClick={() => setStep(3)} className={theme.primaryBtn}>下一步：拟写写作要求</button>
+            <button disabled={!confirmedOutline.length || confirmedOutline.some((item) => !item.trim())} onClick={() => setStep(3)} className={`${theme.primaryBtn} disabled:cursor-not-allowed disabled:opacity-50`}>确认提纲并填写写作要求</button>
           </div>
         </div>
       )}

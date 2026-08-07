@@ -22,16 +22,23 @@ function validateDocx(file: File) {
 }
 
 export async function appendDocxFiles(formData: FormData, files: Iterable<File>) {
+  const extractedFiles: Array<{ file: File; content: string; hash: string }> = [];
   for (const file of files) {
     validateDocx(file);
-    const { value } = await mammoth.extractRawText({ arrayBuffer: await file.arrayBuffer() });
+    const bytes = await file.arrayBuffer();
+    const { value } = await mammoth.extractRawText({ arrayBuffer: bytes });
     const content = value.trim();
     if (content.replace(/\s/g, "").length < 30) {
       throw new Error("未提取到足够文本；扫描件请先进行 OCR 识别");
     }
+    const digest = await crypto.subtle.digest("SHA-256", bytes);
+    const hash = Array.from(new Uint8Array(digest), (item) => item.toString(16).padStart(2, "0")).join("");
     formData.append("files", file);
     formData.append("extractedContents", content);
+    formData.append("fileHashes", hash);
+    extractedFiles.push({ file, content, hash });
   }
+  return extractedFiles;
 }
 
 export async function readUploadResponse(response: Response): Promise<UploadResponse> {
