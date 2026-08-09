@@ -87,6 +87,8 @@ function inferDocumentType(brief: string, requested?: unknown): WritingTask["doc
 
 function inferTask(brief: string, body: AnalysisRequest): WritingTask {
   const documentType = inferDocumentType(brief, body.documentType);
+  const availableSubtypes = getDocumentTemplate(documentType).subtypes ?? [];
+  const requestedSubtype = typeof body.documentSubtype === "string" ? body.documentSubtype.trim().slice(0, 80) : "";
   const quotedTitle = brief.match(/《([^》]{4,100})》/)?.[1];
   const timeRange = brief.match(/(?:20\d{2}年)?(?:上半年|下半年|全年|第[一二三四1234]季度|\d{1,2}月|本周|上周|下周|本月|上月|今年|当前阶段)/)?.[0] ?? "";
   const referenceSubject = brief.match(/根据([^，,。；;\n]{2,60}?)(?:材料|资料)[，,]/)?.[1]?.replace(/^(近期|相关|历史|现有)/, "").trim() ?? "";
@@ -107,7 +109,7 @@ function inferTask(brief: string, body: AnalysisRequest): WritingTask {
   return {
     title: typeof body.title === "string" && body.title.trim() ? body.title.trim().slice(0, 120) : generatedTitle.slice(0, 120),
     documentType,
-    documentSubtype: typeof body.documentSubtype === "string" ? body.documentSubtype.trim().slice(0, 80) : "",
+    documentSubtype: availableSubtypes.includes(requestedSubtype) ? requestedSubtype : "",
     department: typeof body.department === "string" && body.department.trim() ? body.department.trim().slice(0, 80) : department,
     audience: typeof body.audience === "string" && body.audience.trim() ? body.audience.trim().slice(0, 80) : audience,
     purpose: typeof body.purpose === "string" && body.purpose.trim() ? body.purpose.trim().slice(0, 300) : `围绕“${referenceSubject ? `${timeRange}${referenceSubject}工作` : subject || brief.slice(0, 80)}”形成${documentType}`,
@@ -144,10 +146,12 @@ function sanitizePlan(candidate: unknown, fallback: WritingPlan): WritingPlan {
   const taskValue = value.task ?? {};
   const documentType = ordinaryDocumentTypes.includes(taskValue.documentType as WritingTask["documentType"])
     ? taskValue.documentType as WritingTask["documentType"] : fallback.task.documentType;
+  const availableSubtypes = getDocumentTemplate(documentType).subtypes ?? [];
+  const requestedSubtype = typeof taskValue.documentSubtype === "string" ? taskValue.documentSubtype.trim().slice(0, 80) : "";
   const task: WritingTask = {
     title: typeof taskValue.title === "string" && taskValue.title.trim() ? taskValue.title.trim().slice(0, 120) : fallback.task.title,
     documentType,
-    documentSubtype: typeof taskValue.documentSubtype === "string" ? taskValue.documentSubtype.trim().slice(0, 80) : fallback.task.documentSubtype,
+    documentSubtype: availableSubtypes.includes(requestedSubtype) ? requestedSubtype : "",
     department: typeof taskValue.department === "string" ? taskValue.department.trim().slice(0, 80) : fallback.task.department,
     audience: typeof taskValue.audience === "string" ? taskValue.audience.trim().slice(0, 80) : fallback.task.audience,
     purpose: typeof taskValue.purpose === "string" && taskValue.purpose.trim() ? taskValue.purpose.trim().slice(0, 300) : fallback.task.purpose,
