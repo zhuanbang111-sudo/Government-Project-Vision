@@ -4,8 +4,8 @@ import React, { useState, useRef } from "react";
 import Link from "next/link";
 import { theme } from "../ui-config";
 import { documentTypeLabel, normalizeUsageTags, usageTagOptions, type KnowledgeUsageTag } from "../knowledge";
-import { getDocumentTemplate, ordinaryDocumentTypes, templateComponentsForClient, type ComponentRequirement } from "../document-templates";
-import type { WritingAnalysis, WritingTask } from "../../types/writing";
+import { getDocumentTemplate, ordinaryDocumentTypes } from "../document-templates";
+import type { WritingAnalysis, WritingPlan, WritingTask } from "../../types/writing";
 
 interface DocReference {
   id: number;
@@ -71,18 +71,11 @@ interface SelectedOfficialSource {
   passages: Array<{ passageIndex: number; section: string; text: string; score: number; matchReasons: string[]; uses: KnowledgeUsageTag[] }>;
 }
 
-interface ParagraphType {
-  id: number;
-  key?: string;
-  name: string;
-  description: string;
-  requirement?: ComponentRequirement;
-  defaultSelected?: boolean;
-  retrievalUses?: string[];
-}
-
-const initialTemplate = getDocumentTemplate("工作报告");
-const initialComponents = templateComponentsForClient(initialTemplate);
+const taskExamples = [
+  "根据近期地下管线建设材料，起草上半年工作报告，报送局领导，重点反映项目进展、存在问题和下半年计划。",
+  "参考往年材料形成一份安全生产专项工作情况汇报，突出隐患排查、整改成效和需要协调的事项。",
+  "起草城市更新调研报告，分析当前现状、突出问题和原因，并提出下一步政策建议。",
+];
 
 interface ReviewIssue {
   dimension: "职能职责" | "数据准确性" | "工作来源" | "事件合理性";
@@ -95,8 +88,10 @@ export default function GuidedGeneratePage() {
 
   // 向导内部表单状态
   const [topic, setTopic] = useState("");
+  const [taskBrief, setTaskBrief] = useState("");
   const [task, setTask] = useState<WritingTask>({ title: "", documentType: "工作报告", documentSubtype: "", department: "", audience: "", purpose: "", timeRange: "", focus: "" });
   const [analysis, setAnalysis] = useState<WritingAnalysis | null>(null);
+  const [taskAssumptions, setTaskAssumptions] = useState<string[]>([]);
   const [confirmedOutline, setConfirmedOutline] = useState<string[]>([]);
   const [recommendedDocs, setRecommendedDocs] = useState<DocReference[]>([]);
   const [outlineCoverage, setOutlineCoverage] = useState<OutlineCoverageItem[]>([]);
@@ -114,11 +109,6 @@ export default function GuidedGeneratePage() {
   const [officialError, setOfficialError] = useState<string | null>(null);
   const [fetchingOfficialUrls, setFetchingOfficialUrls] = useState<string[]>([]);
   const [manualOfficialUrl, setManualOfficialUrl] = useState("");
-
-  // 新增：段落组件库相关状态
-  const [dbParagraphTypes, setAllParagraphTypes] = useState<ParagraphType[]>(initialComponents);
-  const [selectedParagraphs, setSelectedParagraphs] = useState<ParagraphType[]>(initialComponents.filter((item) => item.defaultSelected));
-  const [templateTouched, setTemplateTouched] = useState(false);
 
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -168,37 +158,51 @@ export default function GuidedGeneratePage() {
     }
   };
 
+  const updateTaskBrief = (value: string) => {
+    setTaskBrief(value);
+    setAnalysis(null);
+    setTaskAssumptions([]);
+    setConfirmedOutline([]);
+    setError(null);
+  };
+
   const handleStep1Submit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!task.title.trim() || !task.department.trim() || !task.purpose.trim() || selectedParagraphs.length === 0) return;
+    if (taskBrief.trim().length < 4) {
+      setError("请用一句话描述本次写作任务");
+      return;
+    }
     setLoading(true);
     setError(null);
-    let recommendationQuery = `${task.documentType} ${task.documentSubtype} ${task.title} ${task.department}`;
-    let recommendationOutline = selectedParagraphs.map((item) => item.name);
     try {
       const response = await fetch("/api/writing-analysis", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          ...task,
-          selectedComponents: selectedParagraphs.map(({ name, description }) => ({ name, description })),
-        }),
+        body: JSON.stringify({ taskBrief }),
       });
-      const data = await response.json();
+      const data = await response.json() as WritingPlan & { error?: string };
       if (!response.ok) throw new Error(data.error || "任务分析失败");
-      setAnalysis(data as WritingAnalysis);
-      const recommendedOutline = (data as WritingAnalysis).recommendedStructure;
-      recommendationOutline = recommendedOutline;
-      setConfirmedOutline(recommendedOutline);
-      recommendationQuery = `${recommendationQuery} ${(data as WritingAnalysis).keywords.join(" ")}`;
-      setTopic(task.title);
-      setStep(2);
+      if (!data.task || !data.analysis || !Array.isArray(data.analysis.recommendedStructure)) throw new Error("任务分析结果不完整");
+      setTask(data.task);
+      setAnalysis(data.analysis);
+      setTaskAssumptions(Array.isArray(data.assumptions) ? data.assumptions : []);
+      setConfirmedOutline(data.analysis.recommendedStructure);
     } catch (err: unknown) {
       setError(err instanceof Error ? err.message : "任务分析失败");
-      return;
     } finally { setLoading(false); }
-    // 使用第一个勾选的段落和主题进行首轮语意检索推荐
-    await triggerSemanticRecommendation(recommendationQuery, recommendationOutline);
+  };
+
+  const handleConfirmPlan = async () => {
+    if (!analysis || !task.title.trim() || confirmedOutline.length === 0 || confirmedOutline.some((item) => !item.trim())) {
+      setError("AI任务单或提纲不完整，请先调整后再确认");
+      return;
+    }
+    const normalizedOutline = confirmedOutline.map((item) => item.trim());
+    const recommendationQuery = [task.documentType, task.documentSubtype, task.title, task.department, task.timeRange, task.focus, ...analysis.keywords].filter(Boolean).join(" ");
+    setConfirmedOutline(normalizedOutline);
+    setTopic(task.title);
+    setStep(2);
+    await triggerSemanticRecommendation(recommendationQuery, normalizedOutline);
   };
 
   const togglePassage = (doc: DocReference, passage: PassageRecommendation) => {
@@ -262,14 +266,6 @@ export default function GuidedGeneratePage() {
     await triggerSemanticRecommendation(manualKeyword);
   };
 
-  const applyDocumentTemplate = (documentType: WritingTask["documentType"], documentSubtype = "") => {
-    const template = getDocumentTemplate(documentType, documentSubtype);
-    const components = templateComponentsForClient(template);
-    setAllParagraphTypes(components);
-    setSelectedParagraphs(components.filter((item) => item.defaultSelected));
-    setTemplateTouched(false);
-  };
-
   const recommendOfficialSources = async () => {
     setOfficialLoading(true);
     setOfficialError(null);
@@ -328,18 +324,20 @@ export default function GuidedGeneratePage() {
     }
   };
 
-  const handleDocumentTypeChange = (documentType: WritingTask["documentType"]) => {
-    if (templateTouched && !window.confirm("切换文种将重新加载该文种的推荐段落组件，是否继续？")) return;
+  const handlePlannedDocumentTypeChange = (documentType: WritingTask["documentType"]) => {
     const template = getDocumentTemplate(documentType);
     const documentSubtype = template.subtypes?.[0] ?? "";
     setTask((current) => ({ ...current, documentType, documentSubtype }));
-    applyDocumentTemplate(documentType, documentSubtype);
+    const outline = getDocumentTemplate(documentType, documentSubtype).components.filter((item) => item.defaultSelected).map((item) => item.name);
+    setConfirmedOutline(outline);
+    setAnalysis((current) => current ? { ...current, recommendedStructure: outline } : current);
   };
 
-  const handleDocumentSubtypeChange = (documentSubtype: string) => {
-    if (templateTouched && !window.confirm("切换二级类型将重新加载推荐段落组件，是否继续？")) return;
+  const handlePlannedDocumentSubtypeChange = (documentSubtype: string) => {
     setTask((current) => ({ ...current, documentSubtype }));
-    applyDocumentTemplate(task.documentType, documentSubtype);
+    const outline = getDocumentTemplate(task.documentType, documentSubtype).components.filter((item) => item.defaultSelected).map((item) => item.name);
+    setConfirmedOutline(outline);
+    setAnalysis((current) => current ? { ...current, recommendedStructure: outline } : current);
   };
 
   const handleStep3Submit = async (e: React.FormEvent) => {
@@ -400,29 +398,6 @@ export default function GuidedGeneratePage() {
     } finally {
       setLoading(false);
     }
-  };
-
-  // 控制组件单项复选勾选
-  const handleToggleParagraphSelection = (p: ParagraphType) => {
-    if (p.requirement === "required") return;
-    setTemplateTouched(true);
-    setSelectedParagraphs((prev) =>
-      prev.some((item) => item.id === p.id)
-        ? prev.filter((item) => item.id !== p.id)
-        : [...prev, p]
-    );
-  };
-
-  // 通过 index 互相交换，实现极简且零依赖的节点上下移动排序
-  const moveParagraphOrder = (index: number, direction: "up" | "down") => {
-    setTemplateTouched(true);
-    const newList = [...selectedParagraphs];
-    if (direction === "up" && index > 0) {
-      [newList[index], newList[index - 1]] = [newList[index - 1], newList[index]];
-    } else if (direction === "down" && index < newList.length - 1) {
-      [newList[index], newList[index + 1]] = [newList[index + 1], newList[index]];
-    }
-    setSelectedParagraphs(newList);
   };
 
   const handleTriggerAIReview = async () => {
@@ -517,7 +492,7 @@ export default function GuidedGeneratePage() {
   const retrievalIsStale = retrievedOutline.length > 0 && JSON.stringify(retrievedOutline) !== JSON.stringify(confirmedOutline);
 
   const stepsDef = [
-    { num: 1, name: "指定主题" },
+    { num: 1, name: "AI任务规划" },
     { num: 2, name: "语料配置" },
     { num: 3, name: "写作要点" },
     { num: 4, name: "AI草稿" },
@@ -564,94 +539,77 @@ export default function GuidedGeneratePage() {
 
       {error && step !== 4 && <div role="alert" className="mb-5 flex items-start justify-between gap-3 rounded border border-red-200 bg-red-50 px-4 py-3 text-xs text-red-700"><span>{error}</span><button type="button" onClick={() => setError(null)} className="font-semibold">关闭</button></div>}
 
-      {/* 第1步：多段落多选与 Up/Down 上下移动排序器 */}
+      {/* 第1步：用户表达任务，AI主动补全任务单并生成完整提纲 */}
       {step === 1 && (
         <form onSubmit={handleStep1Submit} className="space-y-6">
-          <h3 className={theme.sectionTitle}>第1步：指定新公文主题与段落构成样式</h3>
-          
           <div>
-            <label className={theme.label}>拟写新公文主题</label>
-            <input type="text" required autoComplete="off" placeholder="例如：开展全市安全生产排查与综合监管" value={topic} onChange={(e) => setTopic(e.target.value)} className={theme.input} />
+            <p className="text-[10px] font-bold uppercase tracking-wider text-teal-700">AI任务规划</p>
+            <h3 className={`${theme.sectionTitle} mt-1`}>用一句话告诉AI这次要写什么</h3>
+            <p className="mt-2 text-xs leading-5 text-slate-500">无需先填写标题、部门、目的或逐项选择章节。AI会主动识别文种、补全任务信息，并生成可直接确认的完整提纲。</p>
           </div>
 
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-            <input required autoComplete="off" placeholder="材料标题" value={task.title} onChange={(e) => { setTask((current) => ({ ...current, title: e.target.value })); setTopic(e.target.value); }} className={theme.input} />
-            <select aria-label="材料文种" value={task.documentType} onChange={(e) => handleDocumentTypeChange(e.target.value as WritingTask["documentType"])} className={theme.input}>
-              {ordinaryDocumentTypes.map((type) => <option key={type}>{type}</option>)}
-            </select>
-            {activeTemplate.subtypes?.length ? <select aria-label="材料二级类型" value={task.documentSubtype} onChange={(e) => handleDocumentSubtypeChange(e.target.value)} className={theme.input}>
-              {activeTemplate.subtypes.map((subtype) => <option key={subtype}>{subtype}</option>)}
-            </select> : null}
-            <input required autoComplete="organization" placeholder="牵头部门" value={task.department} onChange={(e) => setTask((current) => ({ ...current, department: e.target.value }))} className={theme.input} />
-            <input autoComplete="off" placeholder="报送对象" value={task.audience} onChange={(e) => setTask((current) => ({ ...current, audience: e.target.value }))} className={theme.input} />
-            <input required autoComplete="off" placeholder="写作目的" value={task.purpose} onChange={(e) => setTask((current) => ({ ...current, purpose: e.target.value }))} className={theme.input} />
-            <input autoComplete="off" placeholder="时间范围" value={task.timeRange} onChange={(e) => setTask((current) => ({ ...current, timeRange: e.target.value }))} className={theme.input} />
-            <input autoComplete="off" placeholder="重点关注事项" value={task.focus} onChange={(e) => setTask((current) => ({ ...current, focus: e.target.value }))} className={theme.input} />
-          </div>
-          <div className="rounded border border-teal-100 bg-teal-50/40 px-3 py-2 text-xs text-teal-900">
-            <span className="font-bold">{task.documentSubtype || task.documentType}</span>：{activeTemplate.description}。推荐逻辑为“{activeTemplate.logic}”，切换文种会同步更新下方组件。
-          </div>
-
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-5 pt-2">
-            {/* 左半栏：可选段落组件包选框 */}
-            <div className="border border-slate-200 p-4 rounded bg-slate-50/20">
-              <label className={theme.label}>第一步（左）：勾选本次公文所需段落组件</label>
-              <div className="space-y-2 max-h-64 overflow-y-auto pr-1">
-                {dbParagraphTypes.map((p) => {
-                  const isChecked = selectedParagraphs.some((item) => item.id === p.id);
-                  return (
-                    <label key={p.key ?? p.id} className={`flex items-start space-x-2 text-xs p-2 bg-white rounded border hover:bg-slate-50 ${p.requirement === "required" ? "cursor-not-allowed" : "cursor-pointer"}`}>
-                      <input type="checkbox" checked={isChecked} disabled={p.requirement === "required"} onChange={() => handleToggleParagraphSelection(p)} className="mt-0.5" />
-                      <div>
-                        <p className="flex items-center gap-2 font-bold text-slate-800">{p.name}<span className={`rounded px-1.5 py-0.5 text-[9px] ${p.requirement === "required" ? "bg-red-50 text-red-600" : p.requirement === "optional" ? "bg-slate-100 text-slate-500" : "bg-blue-50 text-blue-600"}`}>{p.requirement === "required" ? "必选" : p.requirement === "optional" ? "可选" : "推荐"}</span></p>
-                        <p className="text-[10px] text-slate-400 mt-0.5">{p.description}</p>
-                      </div>
-                    </label>
-                  );
-                })}
-              </div>
+          <div>
+            <label htmlFor="writing-task-brief" className={theme.label}>本次写作任务</label>
+            <textarea id="writing-task-brief" required minLength={4} maxLength={4000} rows={5} autoFocus value={taskBrief} onChange={(event) => updateTaskBrief(event.target.value)} placeholder="例如：根据近期地下管线建设材料，起草上半年工作报告，报送局领导，重点反映项目进展、存在问题和下半年计划。" className={`${theme.input} resize-y text-sm leading-6`} />
+            <div className="mt-3 flex flex-wrap gap-2">
+              {taskExamples.map((example, index) => <button key={example} type="button" onClick={() => updateTaskBrief(example)} className="rounded-full border border-slate-200 bg-white px-3 py-1.5 text-[10px] text-slate-500 hover:border-teal-300 hover:text-teal-700">示例 {index + 1}</button>)}
             </div>
+          </div>
 
-            {/* 右半栏：调整段落结构顺序 */}
-            <div className="border border-slate-200 p-4 rounded bg-slate-50/20 flex flex-col">
-              <label className={theme.label}>第一步（右）：点击调整段落行文先后顺序</label>
-              {selectedParagraphs.length === 0 ? (
-                <p className="text-xs text-slate-400 text-center py-10 flex-1 flex items-center justify-center">请在左侧勾选您需要的段落组件</p>
-              ) : (
-                <div className="space-y-2 flex-1 overflow-y-auto max-h-64 pr-1">
-                  {selectedParagraphs.map((p, index) => (
-                    <div key={p.id} className="flex justify-between items-center p-2 bg-white border border-slate-200 rounded text-xs">
-                      <span className="font-semibold text-slate-800">{index + 1}. {p.name}</span>
-                      <div className="space-x-1.5 whitespace-nowrap">
-                        <button
-                          type="button"
-                          disabled={index === 0}
-                          onClick={() => moveParagraphOrder(index, "up")}
-                          className="px-1.5 py-0.5 bg-slate-100 hover:bg-slate-200 disabled:opacity-30 rounded text-[10px]"
-                        >
-                          ▲ 上移
-                        </button>
-                        <button
-                          type="button"
-                          disabled={index === selectedParagraphs.length - 1}
-                          onClick={() => moveParagraphOrder(index, "down")}
-                          className="px-1.5 py-0.5 bg-slate-100 hover:bg-slate-200 disabled:opacity-30 rounded text-[10px]"
-                        >
-                          ▼ 下移
-                        </button>
-                      </div>
-                    </div>
-                  ))}
+          {!analysis && <div className="flex justify-end border-t border-slate-100 pt-4">
+            <button type="submit" disabled={loading || taskBrief.trim().length < 4} className={`${theme.primaryBtn} disabled:cursor-not-allowed disabled:opacity-50`}>{loading ? "AI正在理解任务…" : "让AI规划写作任务"}</button>
+          </div>}
+
+          {analysis && <div className="space-y-5">
+            <section className="rounded border border-teal-200 bg-teal-50/30 p-5">
+              <div className="flex flex-wrap items-start justify-between gap-3">
+                <div>
+                  <p className="text-[10px] font-bold uppercase tracking-wider text-teal-700">AI已完成任务理解</p>
+                  <h4 className="mt-1 text-base font-bold text-slate-900">{task.title}</h4>
+                  <p className="mt-2 text-xs leading-5 text-slate-600">{analysis.documentPurpose}</p>
                 </div>
-              )}
-            </div>
-          </div>
+                <span className="rounded-full border border-teal-200 bg-white px-3 py-1 text-[10px] font-semibold text-teal-700">AI建议 · 待确认</span>
+              </div>
+              <dl className="mt-4 grid gap-3 border-t border-teal-100 pt-4 text-xs sm:grid-cols-2">
+                <div><dt className="text-[10px] text-slate-400">文种</dt><dd className="mt-1 font-semibold text-slate-800">{task.documentSubtype || task.documentType}</dd></div>
+                <div><dt className="text-[10px] text-slate-400">牵头部门</dt><dd className="mt-1 font-semibold text-slate-800">{task.department || "未指定（不阻断流程）"}</dd></div>
+                <div><dt className="text-[10px] text-slate-400">报送对象</dt><dd className="mt-1 font-semibold text-slate-800">{task.audience || "内部正式报送口径"}</dd></div>
+                <div><dt className="text-[10px] text-slate-400">时间范围</dt><dd className="mt-1 font-semibold text-slate-800">{task.timeRange || "不限定材料日期"}</dd></div>
+                {task.focus && <div className="sm:col-span-2"><dt className="text-[10px] text-slate-400">写作重点</dt><dd className="mt-1 font-semibold text-slate-800">{task.focus}</dd></div>}
+              </dl>
+              {taskAssumptions.length > 0 && <div className="mt-4 rounded border border-amber-200 bg-amber-50 px-3 py-2 text-[10px] leading-5 text-amber-800"><span className="font-semibold">AI采用的默认判断：</span>{taskAssumptions.join("；")}</div>}
+            </section>
 
-          <div className="text-right border-t pt-4">
-            <button type="submit" disabled={selectedParagraphs.length === 0} className={theme.primaryBtn}>
-              下一步：按提纲匹配语料
-            </button>
-          </div>
+            <section className="rounded border border-slate-200 bg-white p-5">
+              <div className="flex items-center justify-between gap-3"><div><h4 className="text-sm font-bold text-slate-900">AI推荐完整提纲</h4><p className="mt-1 text-[11px] text-slate-400">确认后，系统将逐章匹配历史语料。</p></div><span className="text-[10px] text-slate-400">共 {confirmedOutline.length} 章</span></div>
+              <ol className="mt-4 grid gap-2 sm:grid-cols-2">
+                {confirmedOutline.map((item, index) => <li key={`${index}-${item}`} className="flex items-center gap-3 rounded border border-slate-100 bg-slate-50/70 px-3 py-2.5 text-xs text-slate-700"><span className="flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-teal-800 text-[9px] font-bold text-white">{index + 1}</span><span className="font-medium">{item}</span></li>)}
+              </ol>
+            </section>
+
+            <details className="rounded border border-slate-200 bg-slate-50/30 p-4">
+              <summary className="cursor-pointer text-xs font-semibold text-slate-700">高级调整：修改AI判断或提纲</summary>
+              <div className="mt-4 grid grid-cols-1 gap-3 md:grid-cols-2">
+                <input aria-label="材料标题" autoComplete="off" placeholder="材料标题" value={task.title} onChange={(event) => setTask((current) => ({ ...current, title: event.target.value }))} className={theme.input} />
+                <select aria-label="材料文种" value={task.documentType} onChange={(event) => handlePlannedDocumentTypeChange(event.target.value as WritingTask["documentType"])} className={theme.input}>{ordinaryDocumentTypes.map((type) => <option key={type}>{type}</option>)}</select>
+                {activeTemplate.subtypes?.length ? <select aria-label="材料二级类型" value={task.documentSubtype} onChange={(event) => handlePlannedDocumentSubtypeChange(event.target.value)} className={theme.input}>{activeTemplate.subtypes.map((subtype) => <option key={subtype}>{subtype}</option>)}</select> : null}
+                <input autoComplete="organization" placeholder="牵头部门（可选）" value={task.department} onChange={(event) => setTask((current) => ({ ...current, department: event.target.value }))} className={theme.input} />
+                <input autoComplete="off" placeholder="报送对象（可选）" value={task.audience} onChange={(event) => setTask((current) => ({ ...current, audience: event.target.value }))} className={theme.input} />
+                <input autoComplete="off" placeholder="时间范围（可选）" value={task.timeRange} onChange={(event) => setTask((current) => ({ ...current, timeRange: event.target.value }))} className={theme.input} />
+                <textarea rows={2} placeholder="写作目的" value={task.purpose} onChange={(event) => setTask((current) => ({ ...current, purpose: event.target.value }))} className={`${theme.input} md:col-span-2`} />
+                <textarea rows={2} placeholder="重点关注事项（可选）" value={task.focus} onChange={(event) => setTask((current) => ({ ...current, focus: event.target.value }))} className={`${theme.input} md:col-span-2`} />
+              </div>
+              <div className="mt-4 space-y-2 border-t border-slate-200 pt-4">
+                {confirmedOutline.map((item, index) => <div key={`edit-${index}`} className="flex items-center gap-2"><span className="w-5 text-center text-[10px] font-bold text-teal-800">{index + 1}</span><input aria-label={`第${index + 1}章标题`} value={item} onChange={(event) => setConfirmedOutline((current) => current.map((value, itemIndex) => itemIndex === index ? event.target.value : value))} className="min-w-0 flex-1 rounded border border-slate-200 bg-white px-3 py-2 text-xs outline-none focus:border-teal-600" /><button type="button" disabled={index === 0} onClick={() => moveOutline(index, "up")} className="rounded border border-slate-200 px-2 py-1.5 text-[10px] disabled:opacity-30">上移</button><button type="button" disabled={index === confirmedOutline.length - 1} onClick={() => moveOutline(index, "down")} className="rounded border border-slate-200 px-2 py-1.5 text-[10px] disabled:opacity-30">下移</button><button type="button" onClick={() => setConfirmedOutline((current) => current.filter((_, itemIndex) => itemIndex !== index))} className="rounded border border-red-100 px-2 py-1.5 text-[10px] text-red-600">删除</button></div>)}
+                <button type="button" onClick={() => setConfirmedOutline((current) => [...current, "新增章节"])} className="rounded border border-slate-200 bg-white px-3 py-2 text-[10px] text-slate-600">添加章节</button>
+              </div>
+            </details>
+
+            <div className="flex flex-wrap items-center justify-between gap-3 border-t border-slate-100 pt-4">
+              <button type="submit" disabled={loading} className={`${theme.secondaryBtn} disabled:opacity-50`}>{loading ? "正在重新分析…" : "重新分析任务"}</button>
+              <button type="button" onClick={() => void handleConfirmPlan()} disabled={loading || confirmedOutline.length === 0} className={`${theme.primaryBtn} disabled:cursor-not-allowed disabled:opacity-50`}>确认任务并匹配历史语料</button>
+            </div>
+          </div>}
         </form>
       )}
 
@@ -663,7 +621,7 @@ export default function GuidedGeneratePage() {
               <div>
                 <p className="text-[10px] font-bold uppercase tracking-wider text-teal-700">当前写作任务</p>
                 <h3 className="mt-1 text-base font-bold text-slate-900">{task.title}</h3>
-                <p className="mt-1 text-slate-500">{task.documentSubtype || task.documentType} · {task.department}{task.timeRange ? ` · ${task.timeRange}` : ""}{task.audience ? ` · 报送${task.audience}` : ""}</p>
+                <p className="mt-1 text-slate-500">{[task.documentSubtype || task.documentType, task.department, task.timeRange, task.audience ? `报送${task.audience}` : ""].filter(Boolean).join(" · ")}</p>
               </div>
               <button type="button" onClick={() => setStep(1)} className="rounded border border-slate-200 bg-white px-3 py-1.5 text-[11px] text-slate-600">修改主题</button>
             </div>
@@ -679,13 +637,16 @@ export default function GuidedGeneratePage() {
               </div>
             </details>
           )}
-          <section className="rounded border border-slate-200 bg-white p-4">
+          <details className="rounded border border-slate-200 bg-white p-4">
+            <summary className="cursor-pointer list-none">
             <div className="flex items-center justify-between">
-              <div><h3 className="text-sm font-bold text-slate-800">确认完整提纲</h3><p className="mt-1 text-[11px] text-slate-400">生成时将严格按照这里确认的章节顺序起草。</p></div>
-              <div className="flex gap-2">
-                <button type="button" disabled={loading} onClick={() => void triggerSemanticRecommendation(`${task.title} ${analysis?.keywords.join(" ") ?? ""}`, confirmedOutline)} className="rounded border border-teal-200 px-3 py-1.5 text-[11px] text-teal-700 disabled:opacity-50">按当前提纲重新检索</button>
-                <button type="button" onClick={() => setConfirmedOutline((current) => [...current, "新增章节"])} className="rounded border border-slate-200 px-3 py-1.5 text-[11px] text-slate-600">添加章节</button>
-              </div>
+              <div><h3 className="text-sm font-bold text-slate-800">已确认完整提纲（{confirmedOutline.length}章）</h3><p className="mt-1 text-[11px] text-slate-400">提纲已在第一步确认；需要修改时展开此处。</p></div>
+              <span className="text-[10px] text-slate-400">展开调整</span>
+            </div>
+            </summary>
+            <div className="mt-3 flex justify-end gap-2 border-t border-slate-100 pt-3">
+              <button type="button" disabled={loading} onClick={() => void triggerSemanticRecommendation(`${task.title} ${analysis?.keywords.join(" ") ?? ""}`, confirmedOutline)} className="rounded border border-teal-200 px-3 py-1.5 text-[11px] text-teal-700 disabled:opacity-50">按当前提纲重新检索</button>
+              <button type="button" onClick={() => setConfirmedOutline((current) => [...current, "新增章节"])} className="rounded border border-slate-200 px-3 py-1.5 text-[11px] text-slate-600">添加章节</button>
             </div>
             <div className="mt-3 space-y-2">
               {confirmedOutline.map((item, index) => <div key={`${index}-${item}`} className="flex items-center gap-2">
@@ -696,7 +657,7 @@ export default function GuidedGeneratePage() {
                 <button type="button" onClick={() => setConfirmedOutline((current) => current.filter((_, itemIndex) => itemIndex !== index))} className="rounded border border-red-100 px-2 py-1.5 text-[10px] text-red-600">删除</button>
               </div>)}
             </div>
-          </section>
+          </details>
           {retrievalIsStale && <div className="rounded border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800">提纲已经修改，当前覆盖结果可能过期。请点击“按当前提纲重新检索”后再继续。</div>}
           <section className="rounded border border-slate-200 bg-white p-4">
             <div className="flex flex-wrap items-center justify-between gap-3">
@@ -952,7 +913,7 @@ export default function GuidedGeneratePage() {
           <div className="border-t pt-6 space-x-3">
             <button onClick={() => { navigator.clipboard.writeText(resultDraft); alert("公文已被成功复制。"); }} className={theme.secondaryBtn}>复制公文最终稿</button>
             <button onClick={handleExportDocx} disabled={exporting} className={theme.primaryBtn}>{exporting ? "正在生成 DOCX…" : "下载公文 DOCX"}</button>
-            <button onClick={() => { setStep(1); setTopic(""); setPoints(""); setNewData(""); setResultDraft(""); setOfficialWritingPlan(""); setOfficialCandidates([]); setSelectedOfficialSources([]); setManualOfficialUrl(""); }} className={theme.primaryBtn}>拟写新篇公文</button>
+            <button onClick={() => { setStep(1); setTopic(""); setTaskBrief(""); setTask({ title: "", documentType: "工作报告", documentSubtype: "", department: "", audience: "", purpose: "", timeRange: "", focus: "" }); setAnalysis(null); setTaskAssumptions([]); setConfirmedOutline([]); setPoints(""); setNewData(""); setResultDraft(""); setOfficialWritingPlan(""); setOfficialCandidates([]); setSelectedOfficialSources([]); setManualOfficialUrl(""); }} className={theme.primaryBtn}>拟写新篇公文</button>
           </div>
         </div>
       )}

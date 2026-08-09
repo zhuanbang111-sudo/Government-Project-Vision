@@ -21,6 +21,13 @@ export interface WritingAnalysis {
   knowledgeRequirement: Array<"structure" | "wording" | "facts" | "policy" | "case" | "format">;
 }
 
+export interface WritingPlan {
+  task: WritingTask;
+  analysis: WritingAnalysis;
+  assumptions: string[];
+  fallback?: boolean;
+}
+
 export interface WritingContext {
   task: WritingTask;
   analysis: WritingAnalysis | null;
