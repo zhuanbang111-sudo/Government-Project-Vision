@@ -140,12 +140,12 @@ function fallbackPlan(brief: string, body: AnalysisRequest): WritingPlan {
   };
 }
 
-function sanitizePlan(candidate: unknown, fallback: WritingPlan): WritingPlan {
+function sanitizePlan(candidate: unknown, fallback: WritingPlan, lockedDocumentType?: WritingTask["documentType"]): WritingPlan {
   if (!candidate || typeof candidate !== "object") return fallback;
   const value = candidate as { task?: Partial<WritingTask>; analysis?: Partial<WritingAnalysis>; assumptions?: unknown };
   const taskValue = value.task ?? {};
-  const documentType = ordinaryDocumentTypes.includes(taskValue.documentType as WritingTask["documentType"])
-    ? taskValue.documentType as WritingTask["documentType"] : fallback.task.documentType;
+  const documentType = lockedDocumentType ?? (ordinaryDocumentTypes.includes(taskValue.documentType as WritingTask["documentType"])
+    ? taskValue.documentType as WritingTask["documentType"] : fallback.task.documentType);
   const availableSubtypes = getDocumentTemplate(documentType).subtypes ?? [];
   const requestedSubtype = typeof taskValue.documentSubtype === "string" ? taskValue.documentSubtype.trim().slice(0, 80) : "";
   const task: WritingTask = {
@@ -189,6 +189,8 @@ export async function POST(request: NextRequest) {
     if (brief.length > MAX_BRIEF_LENGTH) return NextResponse.json({ error: "任务描述最多支持 4000 字" }, { status: 413 });
 
     const fallback = fallbackPlan(brief, body);
+    const lockedDocumentType = ordinaryDocumentTypes.includes(body.documentType as WritingTask["documentType"])
+      ? body.documentType as WritingTask["documentType"] : undefined;
     const key = process.env.DEEPSEEK_API_KEY;
     if (!key) return NextResponse.json(fallback);
     try {
@@ -212,7 +214,7 @@ export async function POST(request: NextRequest) {
       const payload = await readBoundedAiJson(response);
       const content = (payload as { choices?: Array<{ message?: { content?: unknown } }> })?.choices?.[0]?.message?.content;
       if (typeof content !== "string") return NextResponse.json(fallback);
-      return NextResponse.json(sanitizePlan(JSON.parse(content.replace(/^```json\s*|\s*```$/g, "")), fallback));
+      return NextResponse.json(sanitizePlan(JSON.parse(content.replace(/^```json\s*|\s*```$/g, "")), fallback, lockedDocumentType));
     } catch (providerError: unknown) {
       console.warn("writing-analysis provider unavailable; using deterministic plan", providerError);
       return NextResponse.json(fallback);

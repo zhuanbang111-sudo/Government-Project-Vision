@@ -5,6 +5,7 @@ import Link from "next/link";
 import { theme } from "../ui-config";
 import { documentTypeLabel, normalizeUsageTags, usageTagOptions, type KnowledgeUsageTag } from "../knowledge";
 import { getDocumentTemplate, ordinaryDocumentTypes } from "../document-templates";
+import { audienceOptions, composeTaskBrief, primaryPlanningTypes, timeRangeOptions, writingTaskPresets, type PlanningDocumentType } from "../writing-task-presets";
 import type { WritingAnalysis, WritingPlan, WritingTask } from "../../types/writing";
 
 interface DocReference {
@@ -71,12 +72,6 @@ interface SelectedOfficialSource {
   passages: Array<{ passageIndex: number; section: string; text: string; score: number; matchReasons: string[]; uses: KnowledgeUsageTag[] }>;
 }
 
-const taskExamples = [
-  "根据近期地下管线建设材料，起草上半年工作报告，报送局领导，重点反映项目进展、存在问题和下半年计划。",
-  "参考往年材料形成一份安全生产专项工作情况汇报，突出隐患排查、整改成效和需要协调的事项。",
-  "起草城市更新调研报告，分析当前现状、突出问题和原因，并提出下一步政策建议。",
-];
-
 interface ReviewIssue {
   dimension: "职能职责" | "数据准确性" | "工作来源" | "事件合理性";
   fragment: string;
@@ -88,7 +83,14 @@ export default function GuidedGeneratePage() {
 
   // 向导内部表单状态
   const [topic, setTopic] = useState("");
-  const [taskBrief, setTaskBrief] = useState("");
+  const [planningType, setPlanningType] = useState<PlanningDocumentType>("auto");
+  const [showMoreTypes, setShowMoreTypes] = useState(false);
+  const [selectedScenarioId, setSelectedScenarioId] = useState(writingTaskPresets.auto.scenarios[0].id);
+  const [taskTopic, setTaskTopic] = useState("");
+  const [selectedTimeRange, setSelectedTimeRange] = useState("");
+  const [selectedAudience, setSelectedAudience] = useState("");
+  const [selectedFocuses, setSelectedFocuses] = useState<string[]>(writingTaskPresets.auto.focusOptions.slice(0, 4));
+  const [extraRequirement, setExtraRequirement] = useState("");
   const [task, setTask] = useState<WritingTask>({ title: "", documentType: "工作报告", documentSubtype: "", department: "", audience: "", purpose: "", timeRange: "", focus: "" });
   const [analysis, setAnalysis] = useState<WritingAnalysis | null>(null);
   const [taskAssumptions, setTaskAssumptions] = useState<string[]>([]);
@@ -113,6 +115,10 @@ export default function GuidedGeneratePage() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [manualKeyword, setManualKeyword] = useState("");
+
+  const currentPreset = writingTaskPresets[planningType];
+  const selectedScenario = currentPreset.scenarios.find((item) => item.id === selectedScenarioId) ?? currentPreset.scenarios[0];
+  const generatedTaskBrief = composeTaskBrief({ planningType, scenario: selectedScenario, topic: taskTopic.trim(), timeRange: selectedTimeRange, audience: selectedAudience, focuses: selectedFocuses, extra: extraRequirement });
 
   const textareaRef = useRef<HTMLTextAreaElement>(null);
 
@@ -158,18 +164,35 @@ export default function GuidedGeneratePage() {
     }
   };
 
-  const updateTaskBrief = (value: string) => {
-    setTaskBrief(value);
+  const invalidateTaskPlan = () => {
     setAnalysis(null);
     setTaskAssumptions([]);
     setConfirmedOutline([]);
     setError(null);
   };
 
+  const selectPlanningType = (documentType: PlanningDocumentType) => {
+    const preset = writingTaskPresets[documentType];
+    setPlanningType(documentType);
+    setSelectedScenarioId(preset.scenarios[0].id);
+    setSelectedFocuses(preset.focusOptions.slice(0, 4));
+    invalidateTaskPlan();
+  };
+
+  const selectScenario = (scenarioId: string) => {
+    setSelectedScenarioId(scenarioId);
+    invalidateTaskPlan();
+  };
+
+  const toggleFocus = (focus: string) => {
+    setSelectedFocuses((current) => current.includes(focus) ? current.filter((item) => item !== focus) : [...current, focus]);
+    invalidateTaskPlan();
+  };
+
   const handleStep1Submit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (taskBrief.trim().length < 4) {
-      setError("请用一句话描述本次写作任务");
+    if (taskTopic.trim().length < 2) {
+      setError(`请填写${currentPreset.topicLabel}`);
       return;
     }
     setLoading(true);
@@ -178,7 +201,13 @@ export default function GuidedGeneratePage() {
       const response = await fetch("/api/writing-analysis", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ taskBrief }),
+        body: JSON.stringify({
+          taskBrief: generatedTaskBrief,
+          ...(planningType === "auto" ? {} : { documentType: planningType }),
+          timeRange: selectedTimeRange,
+          audience: selectedAudience,
+          focus: selectedFocuses.join("、"),
+        }),
       });
       const data = await response.json() as WritingPlan & { error?: string };
       if (!response.ok) throw new Error(data.error || "任务分析失败");
@@ -544,20 +573,50 @@ export default function GuidedGeneratePage() {
         <form onSubmit={handleStep1Submit} className="space-y-6">
           <div>
             <p className="text-[10px] font-bold uppercase tracking-wider text-teal-700">AI任务规划</p>
-            <h3 className={`${theme.sectionTitle} mt-1`}>用一句话告诉AI这次要写什么</h3>
-            <p className="mt-2 text-xs leading-5 text-slate-500">无需先填写标题、部门、目的或逐项选择章节。AI会主动识别文种、补全任务信息，并生成可直接确认的完整提纲。</p>
+            <h3 className={`${theme.sectionTitle} mt-1`}>点选写作场景，只填写一个短主题</h3>
+            <p className="mt-2 text-xs leading-5 text-slate-500">系统会把您的选择自动组合成完整任务描述，再由AI补全标题、任务信息和提纲。明确选择的文种不会被AI覆盖。</p>
           </div>
+
+          <fieldset>
+            <legend className={theme.label}>1. 选择文种</legend>
+            <div className="grid grid-cols-2 gap-2 sm:grid-cols-3">
+              {primaryPlanningTypes.map((documentType) => <button key={documentType} type="button" aria-pressed={planningType === documentType} onClick={() => selectPlanningType(documentType)} className={`rounded border px-3 py-3 text-left text-xs transition ${planningType === documentType ? "border-teal-700 bg-teal-50 font-bold text-teal-800 shadow-sm" : "border-slate-200 bg-white text-slate-600 hover:border-teal-200"}`}><span className="block">{documentType === "auto" ? "让AI判断" : documentType}</span>{documentType === "auto" && <span className="mt-1 block text-[9px] font-normal text-slate-400">不确定文种时使用</span>}</button>)}
+            </div>
+            <button type="button" onClick={() => setShowMoreTypes((current) => !current)} className="mt-2 text-[10px] font-semibold text-teal-700 hover:underline">{showMoreTypes ? "收起其他文种" : "更多文种"}</button>
+            {showMoreTypes && <div className="mt-2 flex flex-wrap gap-2">{ordinaryDocumentTypes.filter((documentType) => !primaryPlanningTypes.includes(documentType)).map((documentType) => <button key={documentType} type="button" aria-pressed={planningType === documentType} onClick={() => selectPlanningType(documentType)} className={`rounded-full border px-3 py-1.5 text-[10px] ${planningType === documentType ? "border-teal-700 bg-teal-50 font-semibold text-teal-800" : "border-slate-200 bg-white text-slate-500"}`}>{documentType}</button>)}</div>}
+          </fieldset>
+
+          <fieldset>
+            <legend className={theme.label}>2. 选择常用场景</legend>
+            <div className="grid gap-2 sm:grid-cols-3">
+              {currentPreset.scenarios.map((scenario) => <button key={scenario.id} type="button" aria-pressed={selectedScenario.id === scenario.id} onClick={() => selectScenario(scenario.id)} className={`rounded border p-3 text-left transition ${selectedScenario.id === scenario.id ? "border-teal-600 bg-teal-50/70 shadow-sm" : "border-slate-200 bg-white hover:border-teal-200"}`}><span className="block text-xs font-semibold text-slate-800">{scenario.name}</span><span className="mt-1 block text-[10px] leading-4 text-slate-400">{scenario.description}</span></button>)}
+            </div>
+          </fieldset>
 
           <div>
-            <label htmlFor="writing-task-brief" className={theme.label}>本次写作任务</label>
-            <textarea id="writing-task-brief" required minLength={4} maxLength={4000} rows={5} autoFocus value={taskBrief} onChange={(event) => updateTaskBrief(event.target.value)} placeholder="例如：根据近期地下管线建设材料，起草上半年工作报告，报送局领导，重点反映项目进展、存在问题和下半年计划。" className={`${theme.input} resize-y text-sm leading-6`} />
-            <div className="mt-3 flex flex-wrap gap-2">
-              {taskExamples.map((example, index) => <button key={example} type="button" onClick={() => updateTaskBrief(example)} className="rounded-full border border-slate-200 bg-white px-3 py-1.5 text-[10px] text-slate-500 hover:border-teal-300 hover:text-teal-700">示例 {index + 1}</button>)}
-            </div>
+            <label htmlFor="writing-task-topic" className={theme.label}>3. {currentPreset.topicLabel}</label>
+            <input id="writing-task-topic" required minLength={2} maxLength={120} autoFocus autoComplete="off" value={taskTopic} onChange={(event) => { setTaskTopic(event.target.value); invalidateTaskPlan(); }} placeholder={currentPreset.topicPlaceholder} className={`${theme.input} text-sm font-medium`} />
           </div>
 
+          <div className="grid gap-5 sm:grid-cols-2">
+            <fieldset><legend className={theme.label}>时间范围（可不选）</legend><div className="flex flex-wrap gap-2">{timeRangeOptions.map((value) => <button key={value} type="button" aria-pressed={selectedTimeRange === value} onClick={() => { setSelectedTimeRange((current) => current === value ? "" : value); invalidateTaskPlan(); }} className={`rounded-full border px-3 py-1.5 text-[10px] ${selectedTimeRange === value ? "border-teal-600 bg-teal-50 font-semibold text-teal-800" : "border-slate-200 text-slate-500"}`}>{value}</button>)}</div></fieldset>
+            <fieldset><legend className={theme.label}>报送对象（可不选）</legend><div className="flex flex-wrap gap-2">{audienceOptions.map((value) => <button key={value} type="button" aria-pressed={selectedAudience === value} onClick={() => { setSelectedAudience((current) => current === value ? "" : value); invalidateTaskPlan(); }} className={`rounded-full border px-3 py-1.5 text-[10px] ${selectedAudience === value ? "border-teal-600 bg-teal-50 font-semibold text-teal-800" : "border-slate-200 text-slate-500"}`}>{value}</button>)}</div></fieldset>
+          </div>
+
+          <fieldset>
+            <legend className={theme.label}>重点内容（已自动推荐，可直接使用）</legend>
+            <div className="flex flex-wrap gap-2">{currentPreset.focusOptions.map((focus) => <button key={focus} type="button" aria-pressed={selectedFocuses.includes(focus)} onClick={() => toggleFocus(focus)} className={`rounded-full border px-3 py-1.5 text-[10px] ${selectedFocuses.includes(focus) ? "border-teal-600 bg-teal-50 font-semibold text-teal-800" : "border-slate-200 bg-white text-slate-500"}`}>{selectedFocuses.includes(focus) ? "✓ " : "+ "}{focus}</button>)}</div>
+          </fieldset>
+
+          <details className="rounded border border-slate-200 bg-slate-50/30 p-3">
+            <summary className="cursor-pointer text-[11px] font-semibold text-slate-600">补充特殊要求（可不填）</summary>
+            <textarea rows={2} maxLength={1000} value={extraRequirement} onChange={(event) => { setExtraRequirement(event.target.value); invalidateTaskPlan(); }} placeholder="例如：控制在3000字以内，突出问题导向……" className={`${theme.input} mt-3`} />
+          </details>
+
+          {!analysis && <section className="rounded border border-teal-100 bg-teal-50/30 px-4 py-3 text-xs leading-5 text-teal-900"><p className="text-[10px] font-bold text-teal-700">系统将自动形成的任务描述</p><p className="mt-1">{taskTopic.trim().length >= 2 ? generatedTaskBrief : `填写${currentPreset.topicLabel}后，系统会在这里自动组合完整任务。`}</p></section>}
+
           {!analysis && <div className="flex justify-end border-t border-slate-100 pt-4">
-            <button type="submit" disabled={loading || taskBrief.trim().length < 4} className={`${theme.primaryBtn} disabled:cursor-not-allowed disabled:opacity-50`}>{loading ? "AI正在理解任务…" : "让AI规划写作任务"}</button>
+            <button type="submit" disabled={loading || taskTopic.trim().length < 2} className={`${theme.primaryBtn} disabled:cursor-not-allowed disabled:opacity-50`}>{loading ? "AI正在理解任务…" : "让AI规划写作任务"}</button>
           </div>}
 
           {analysis && <div className="space-y-5">
@@ -913,7 +972,7 @@ export default function GuidedGeneratePage() {
           <div className="border-t pt-6 space-x-3">
             <button onClick={() => { navigator.clipboard.writeText(resultDraft); alert("公文已被成功复制。"); }} className={theme.secondaryBtn}>复制公文最终稿</button>
             <button onClick={handleExportDocx} disabled={exporting} className={theme.primaryBtn}>{exporting ? "正在生成 DOCX…" : "下载公文 DOCX"}</button>
-            <button onClick={() => { setStep(1); setTopic(""); setTaskBrief(""); setTask({ title: "", documentType: "工作报告", documentSubtype: "", department: "", audience: "", purpose: "", timeRange: "", focus: "" }); setAnalysis(null); setTaskAssumptions([]); setConfirmedOutline([]); setPoints(""); setNewData(""); setResultDraft(""); setOfficialWritingPlan(""); setOfficialCandidates([]); setSelectedOfficialSources([]); setManualOfficialUrl(""); }} className={theme.primaryBtn}>拟写新篇公文</button>
+            <button onClick={() => { setStep(1); setTopic(""); setPlanningType("auto"); setShowMoreTypes(false); setSelectedScenarioId(writingTaskPresets.auto.scenarios[0].id); setTaskTopic(""); setSelectedTimeRange(""); setSelectedAudience(""); setSelectedFocuses(writingTaskPresets.auto.focusOptions.slice(0, 4)); setExtraRequirement(""); setTask({ title: "", documentType: "工作报告", documentSubtype: "", department: "", audience: "", purpose: "", timeRange: "", focus: "" }); setAnalysis(null); setTaskAssumptions([]); setConfirmedOutline([]); setPoints(""); setNewData(""); setResultDraft(""); setOfficialWritingPlan(""); setOfficialCandidates([]); setSelectedOfficialSources([]); setManualOfficialUrl(""); }} className={theme.primaryBtn}>拟写新篇公文</button>
           </div>
         </div>
       )}
