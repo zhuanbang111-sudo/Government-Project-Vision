@@ -28,6 +28,31 @@ export interface WritingPlan {
   fallback?: boolean;
 }
 
+export type DraftSectionStatus = "supported" | "pending" | "narrative" | "missing";
+
+export interface DraftSectionAudit {
+  title: string;
+  status: DraftSectionStatus;
+  citations: string[];
+  verifiedCitations: string[];
+  unverifiedCitations: string[];
+  usesUserData: boolean;
+  missingDataCount: number;
+}
+
+export interface DraftAudit {
+  sectionCount: number;
+  matchedSections: number;
+  citedSections: number;
+  citationCount: number;
+  verifiedCitationCount: number;
+  unverifiedCitationCount: number;
+  missingDataCount: number;
+  invalidCitations: string[];
+  sections: DraftSectionAudit[];
+  notices: string[];
+}
+
 export interface WritingContext {
   task: WritingTask;
   analysis: WritingAnalysis | null;

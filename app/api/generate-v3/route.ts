@@ -4,6 +4,7 @@ import { getDatabase, placeholders } from "../_platform";
 import { loadExternalReferencePassages, parseExternalReferences } from "../_official-sources";
 import { rankReferenceDocuments, segmentDocumentContent, type RetrievalDocument } from "../_retrieval";
 import { getChatCompletionsUrl, getWritingAiSettings } from "../_settings";
+import { buildDraftAudit, type DraftSourceEntry } from "./draft-audit";
 
 type ParagraphType = { id: number; name: string; description: string };
 const MAX_REFERENCE_DOCUMENTS = 6;
@@ -103,7 +104,7 @@ export async function POST(request: NextRequest) {
     const references = ranked?.results ?? documents;
     const localReferenceBudget = requestedExternalReferences.length ? 8_000 : MAX_REFERENCE_CHARS;
     let remainingChars = localReferenceBudget;
-    const sourceEntries: Array<{ id: number | string; kind: "knowledge" | "official-web"; marker: string; filename: string; verified: boolean; passageIndex?: number; section?: string; excerpt?: string; uses?: string[]; url?: string; publisher?: string; fetchedAt?: string; contentHash?: string }> = [];
+    const sourceEntries: DraftSourceEntry[] = [];
     let referenceText = "";
     if (passageSelectionProvided) {
       const byId = new Map(references.map((document) => [document.id, document]));
@@ -176,7 +177,9 @@ export async function POST(request: NextRequest) {
 5. 只能模仿参考材料的结构和正式措辞，不得复制与当前主题无关的事实，不得虚构来源。
 6. 已核验来源优先作为事实和政策依据；未核验来源只能作为待核查参考。
 7. 每个片段只能按照“指定用途”使用；仅标记为结构或措辞参考的片段，不得作为事实或政策依据。
-语言应正式、准确、简洁，层级编号规范，段落衔接自然。`;
+8. 每个提纲章节必须另起一行输出与已确认提纲完全一致的章节标题，不得改名、合并或遗漏，以便逐章审计。
+9. 对来源内容可以归纳，但不得扩大原文结论；没有依据时只能使用不含具体事实的衔接语，或者明确标注待补信息。
+10. 语言应正式、准确、简洁，层级编号规范，段落衔接自然。`;
     const userPrompt = `【材料主题】\n${topic.trim()}\n\n【目标文种】\n${typeof documentType === "string" ? documentType : "政府材料"}${typeof documentSubtype === "string" && documentSubtype ? `（${documentSubtype}）` : ""}\n\n【已确认完整提纲】\n${structure}\n\n【写作要点】\n${points.trim().slice(0, MAX_INPUT_CHARS)}\n\n【用户补充数据】\n${typeof newData === "string" && newData.trim() ? newData.trim().slice(0, MAX_INPUT_CHARS) : "无"}\n\n【本次所需知识】\n${requiredUses.join("、") || "结构、措辞、事实和政策依据"}\n\n【参考材料】\n${referenceText || "无可用参考材料。不得补充未经提供的具体事实。"}`;
 
     const response = await fetch(getChatCompletionsUrl(aiSettings.baseUrl), {
@@ -195,6 +198,7 @@ export async function POST(request: NextRequest) {
     if (typeof text !== "string" || !text.trim()) throw new Error("写作服务未返回有效文本");
 
     const draft = extractDocument(text);
+    const draftAudit = buildDraftAudit(draft, paragraphs, sourceEntries);
     const referenceIds = [...new Set(sourceEntries.filter((source) => source.kind === "knowledge").map((source) => source.id as number))];
     const sources = sourceEntries.map((source) => `${source.marker}. [${source.filename}]${source.publisher ? `｜${source.publisher}` : ""}${source.passageIndex !== undefined ? `｜原文第${source.passageIndex + 1}段` : ""}${source.section ? `｜用于“${source.section}”` : ""}${source.url ? `｜${source.url}` : ""}（${source.verified ? "已核验" : "未核验"}）`).join("\n") || "未使用参考文件";
     await db.prepare("INSERT INTO generations (content, doc_type, topic, reference_ids) VALUES (?, ?, ?, ?)")
@@ -205,6 +209,7 @@ export async function POST(request: NextRequest) {
       retrievalMode: passageSelectionProvided ? "selected-passages" : ranked?.mode ?? "lexical",
       sources: sourceEntries,
       referenceAudit: sourceEntries,
+      draftAudit,
     });
   } catch (error: unknown) {
     console.error("generate-v3 failed", error);

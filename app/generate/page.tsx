@@ -6,7 +6,7 @@ import { theme } from "../ui-config";
 import { documentTypeLabel, normalizeUsageTags, usageTagOptions, type KnowledgeUsageTag } from "../knowledge";
 import { getDocumentTemplate, ordinaryDocumentTypes } from "../document-templates";
 import { audienceOptions, composeTaskBrief, primaryPlanningTypes, timeRangeOptions, writingTaskPresets, type PlanningDocumentType } from "../writing-task-presets";
-import type { WritingAnalysis, WritingPlan, WritingTask } from "../../types/writing";
+import type { DraftAudit, DraftSectionStatus, WritingAnalysis, WritingPlan, WritingTask } from "../../types/writing";
 
 interface DocReference {
   id: number;
@@ -104,6 +104,7 @@ export default function GuidedGeneratePage() {
   const [points, setPoints] = useState("");
   const [newData, setNewData] = useState("");
   const [resultDraft, setResultDraft] = useState("");
+  const [draftAudit, setDraftAudit] = useState<DraftAudit | null>(null);
   const [officialWritingPlan, setOfficialWritingPlan] = useState("");
   const [officialCandidates, setOfficialCandidates] = useState<OfficialSourceCandidate[]>([]);
   const [selectedOfficialSources, setSelectedOfficialSources] = useState<SelectedOfficialSource[]>([]);
@@ -419,9 +420,11 @@ export default function GuidedGeneratePage() {
           knowledgeRequirements: analysis?.knowledgeRequirement ?? [],
         }),
       });
-      const data = await res.json();
+      const data = await res.json() as { text?: string; draftAudit?: DraftAudit; error?: string };
       if (!res.ok) throw new Error(data.error || "AI 分段起草失败");
+      if (typeof data.text !== "string" || !data.text.trim()) throw new Error("AI 未返回有效草稿");
       setResultDraft(data.text);
+      setDraftAudit(data.draftAudit ?? null);
     } catch (err: unknown) {
       setError(err instanceof Error ? err.message : "生成草稿失败");
     } finally {
@@ -492,6 +495,15 @@ export default function GuidedGeneratePage() {
     }
   };
 
+  const getDraftStatusMeta = (status: DraftSectionStatus) => {
+    switch (status) {
+      case "supported": return { label: "已有依据", style: "border-emerald-200 bg-emerald-50 text-emerald-700" };
+      case "pending": return { label: "待核验", style: "border-amber-200 bg-amber-50 text-amber-700" };
+      case "narrative": return { label: "叙述性内容", style: "border-blue-100 bg-blue-50 text-blue-700" };
+      case "missing": return { label: "章节缺失", style: "border-red-200 bg-red-50 text-red-700" };
+    }
+  };
+
   const parseResultDraft = () => {
     if (!resultDraft) return { body: "", sources: "" };
     const parts = resultDraft.split("--- 参考来源列表 ---");
@@ -530,7 +542,7 @@ export default function GuidedGeneratePage() {
   ];
 
   return (
-    <div className={`mx-auto bg-white p-6 sm:p-8 rounded border border-slate-200 shadow-sm transition-all ${step === 5 ? "max-w-6xl" : step === 2 ? "max-w-5xl" : "max-w-3xl"}`}>
+    <div className={`mx-auto bg-white p-6 sm:p-8 rounded border border-slate-200 shadow-sm transition-all ${step === 5 ? "max-w-6xl" : step === 2 || step === 4 ? "max-w-5xl" : "max-w-3xl"}`}>
       
       {/* 顶部指示器 */}
       <div className="border-b border-slate-100 pb-6 mb-6">
@@ -865,11 +877,15 @@ export default function GuidedGeneratePage() {
       {/* 第4步 */}
       {step === 4 && (
         <div className="space-y-5">
-          <h3 className={theme.sectionTitle}>第4步：生成公文草稿结果 (经AI合并与衔接润色)</h3>
+          <div>
+            <p className="text-[10px] font-bold uppercase tracking-wider text-teal-700">AI结构化起草</p>
+            <h3 className={`${theme.sectionTitle} mt-1`}>第4步：形成有据可查的公文草稿</h3>
+            <p className="mt-2 text-xs leading-5 text-slate-500">AI已按文种和提纲组织材料，并自动核对章节完整性、引用覆盖与待补信息。</p>
+          </div>
           {loading ? (
             <div className="py-12 text-center space-y-3">
               <div className="inline-block animate-spin rounded-full h-8 w-8 border-4 border-teal-800 border-t-transparent"></div>
-              <p className="text-xs text-slate-500 animate-pulse">正在执行「单段落匹配」+「单段落生成」+「初稿整体润色」，两轮大调用，请稍候...</p>
+              <p className="text-xs text-slate-500 animate-pulse">正在按提纲组织材料、绑定事实依据并检查章节完整性，请稍候...</p>
             </div>
           ) : error ? (
             <div className="p-4 bg-red-50 text-red-700 border rounded text-xs">
@@ -878,14 +894,47 @@ export default function GuidedGeneratePage() {
             </div>
           ) : (
             <div className="space-y-4">
-              <div className="p-5 bg-slate-50/50 border rounded max-h-96 overflow-y-auto leading-relaxed">
-                <div className="whitespace-pre-wrap text-sm text-slate-800 font-sans">{renderHighlightText(body)}</div>
+              {draftAudit && <section className="space-y-4 rounded border border-slate-200 bg-slate-50/40 p-4">
+                <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+                  {[
+                    ["提纲完整度", `${draftAudit.matchedSections}/${draftAudit.sectionCount}`],
+                    ["有依据章节", `${draftAudit.citedSections}/${draftAudit.sectionCount}`],
+                    ["有效引用", `${draftAudit.verifiedCitationCount} 条`],
+                    ["待补数据", `${draftAudit.missingDataCount} 处`],
+                  ].map(([label, value]) => <div key={label} className="rounded border border-slate-200 bg-white px-3 py-2"><p className="text-[9px] text-slate-400">{label}</p><p className="mt-1 text-sm font-bold text-slate-800">{value}</p></div>)}
+                </div>
+                <div className="grid gap-2 sm:grid-cols-2">
+                  {draftAudit.sections.map((section, index) => {
+                    const status = getDraftStatusMeta(section.status);
+                    return <div key={`${section.title}-${index}`} className="rounded border border-slate-200 bg-white p-3 text-[10px]">
+                      <div className="flex items-start justify-between gap-2"><span className="font-semibold text-slate-700">{index + 1}. {section.title}</span><span className={`shrink-0 rounded border px-1.5 py-0.5 ${status.style}`}>{status.label}</span></div>
+                      <p className="mt-2 text-slate-400">{section.citations.length ? `引用：${section.citations.join("、")}` : section.usesUserData ? "依据：用户本次补充" : "未使用具体引用"}{section.missingDataCount ? `；待补 ${section.missingDataCount} 处` : ""}</p>
+                    </div>;
+                  })}
+                </div>
+                <div className="rounded border border-amber-100 bg-amber-50/60 px-3 py-2 text-[10px] leading-5 text-amber-800">{draftAudit.notices.map((notice) => <p key={notice}>• {notice}</p>)}</div>
+              </section>}
+              <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_240px]">
+                <div className="max-h-[560px] overflow-y-auto rounded border bg-white p-5 leading-relaxed">
+                  <div className="whitespace-pre-wrap text-sm text-slate-800 font-sans">{renderHighlightText(body)}</div>
+                </div>
+                <aside className="rounded border border-teal-100 bg-teal-50/30 p-4 text-xs text-teal-900">
+                  <p className="font-semibold">AI本次完成的工作</p>
+                  <ul className="mt-3 space-y-2 text-[10px] leading-5 text-slate-600">
+                    <li>✓ 按确认提纲组织章节</li>
+                    <li>✓ 按目标文种调整表达</li>
+                    <li>✓ 将事实句绑定到来源片段</li>
+                    <li>✓ 标记用户补充和待补数据</li>
+                    <li>✓ 检查遗漏、无效引用和未核验来源</li>
+                  </ul>
+                  <p className="mt-4 border-t border-teal-100 pt-3 text-[9px] leading-4 text-slate-400">“叙述性内容”并不代表错误；如果其中出现具体时间、数字、机构或政策结论，应在下一步补充依据。</p>
+                </aside>
               </div>
               {sources && (
-                <div className="p-4 bg-teal-50/30 border border-teal-100 rounded text-xs text-teal-800">
-                  <p className="font-semibold mb-1">📌 本篇拟稿参考来源文献：</p>
-                  <pre className="whitespace-pre-wrap font-sans">{sources}</pre>
-                </div>
+                <details className="rounded border border-teal-100 bg-teal-50/30 p-4 text-xs text-teal-800">
+                  <summary className="cursor-pointer font-semibold">查看本篇草稿的完整来源清单</summary>
+                  <pre className="mt-3 whitespace-pre-wrap font-sans">{sources}</pre>
+                </details>
               )}
               <div className="flex justify-between border-t pt-4">
                 <button onClick={() => setStep(3)} className={theme.secondaryBtn}>上一步</button>
@@ -972,7 +1021,7 @@ export default function GuidedGeneratePage() {
           <div className="border-t pt-6 space-x-3">
             <button onClick={() => { navigator.clipboard.writeText(resultDraft); alert("公文已被成功复制。"); }} className={theme.secondaryBtn}>复制公文最终稿</button>
             <button onClick={handleExportDocx} disabled={exporting} className={theme.primaryBtn}>{exporting ? "正在生成 DOCX…" : "下载公文 DOCX"}</button>
-            <button onClick={() => { setStep(1); setTopic(""); setPlanningType("auto"); setShowMoreTypes(false); setSelectedScenarioId(writingTaskPresets.auto.scenarios[0].id); setTaskTopic(""); setSelectedTimeRange(""); setSelectedAudience(""); setSelectedFocuses(writingTaskPresets.auto.focusOptions.slice(0, 4)); setExtraRequirement(""); setTask({ title: "", documentType: "工作报告", documentSubtype: "", department: "", audience: "", purpose: "", timeRange: "", focus: "" }); setAnalysis(null); setTaskAssumptions([]); setConfirmedOutline([]); setPoints(""); setNewData(""); setResultDraft(""); setOfficialWritingPlan(""); setOfficialCandidates([]); setSelectedOfficialSources([]); setManualOfficialUrl(""); }} className={theme.primaryBtn}>拟写新篇公文</button>
+            <button onClick={() => { setStep(1); setTopic(""); setPlanningType("auto"); setShowMoreTypes(false); setSelectedScenarioId(writingTaskPresets.auto.scenarios[0].id); setTaskTopic(""); setSelectedTimeRange(""); setSelectedAudience(""); setSelectedFocuses(writingTaskPresets.auto.focusOptions.slice(0, 4)); setExtraRequirement(""); setTask({ title: "", documentType: "工作报告", documentSubtype: "", department: "", audience: "", purpose: "", timeRange: "", focus: "" }); setAnalysis(null); setTaskAssumptions([]); setConfirmedOutline([]); setPoints(""); setNewData(""); setResultDraft(""); setDraftAudit(null); setOfficialWritingPlan(""); setOfficialCandidates([]); setSelectedOfficialSources([]); setManualOfficialUrl(""); }} className={theme.primaryBtn}>拟写新篇公文</button>
           </div>
         </div>
       )}
