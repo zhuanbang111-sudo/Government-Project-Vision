@@ -54,7 +54,7 @@ async function searchGovernmentMetadata(query: string) {
   searchUrl.searchParams.set("cc", "cn");
   searchUrl.searchParams.set("setlang", "zh-Hans");
   const response = await fetch(searchUrl, {
-    headers: { Accept: "text/html", "User-Agent": "Mozilla/5.0 (compatible; GovernmentWritingAssistant/1.0)" },
+    headers: { Accept: "application/rss+xml, application/xml;q=0.9, text/xml;q=0.8", "User-Agent": "Mozilla/5.0 (compatible; GovernmentWritingAssistant/1.0)" },
     signal: AbortSignal.timeout(15_000),
   });
   if (!response.ok) throw new Error(`官网索引服务返回 ${response.status}`);
