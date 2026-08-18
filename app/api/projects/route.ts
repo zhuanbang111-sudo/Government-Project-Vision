@@ -23,7 +23,7 @@ export async function GET(request: NextRequest) {
       FROM writing_projects p JOIN users u ON u.id = p.owner_user_id
       WHERE p.workspace_id = ? AND (${includeArchived ? "1 = 1" : "p.archived_at IS NULL"})
       ORDER BY p.updated_at DESC LIMIT 200`).bind(identity.workspaceId).all();
-    return NextResponse.json({ projects: results, identity });
+    return NextResponse.json({ projects: results, identity }, { headers: { "Cache-Control": "private, no-store" } });
   } catch (error: unknown) {
     return NextResponse.json({ error: errorMessage(error) }, { status: identityError(error) ? 401 : 500 });
   }
@@ -51,4 +51,3 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: errorMessage(error) }, { status: identityError(error) ? 401 : 500 });
   }
 }
-

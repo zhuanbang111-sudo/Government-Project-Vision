@@ -26,7 +26,7 @@ export default function ProjectsPage() {
   const [error, setError] = useState<string | null>(null);
   useEffect(() => {
     const controller = new AbortController();
-    void fetch("/api/projects", { cache: "no-store", signal: controller.signal }).then(async (response) => {
+    void fetch("/api/projects?view=active", { cache: "no-store", signal: controller.signal }).then(async (response) => {
       const data = await response.json() as { projects?: Project[]; error?: string };
       if (!response.ok) throw new Error(data.error || "项目加载失败");
       setProjects(Array.isArray(data.projects) ? data.projects : []);
