@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { normalizeDocumentType, writingTypeToKnowledgeType } from "../../knowledge";
 import { getDatabase } from "../_platform";
 import { rankPassagesByOutline, rankReferenceDocuments, type RetrievalDocument } from "../_retrieval";
+import { identityError, resolveIdentity } from "../_identity";
 
 export async function POST(request: NextRequest) {
   try {
@@ -13,10 +14,11 @@ export async function POST(request: NextRequest) {
       ? writingTypeToKnowledgeType(body.documentType) ?? (/^[a-z_]+$/.test(body.documentType) ? normalizeDocumentType(body.documentType) : null)
       : null;
     const db = await getDatabase();
+    const identity = await resolveIdentity(request, db);
     const { results: documents } = await db.prepare(
       `SELECT id, filename, content, department, document_type, usage_tags, topic_tags, verification_status, vector_data
-       FROM documents WHERE processing_status = 'ready' ORDER BY created_at DESC LIMIT 500`,
-    ).all<RetrievalDocument>();
+       FROM documents WHERE workspace_id = ? AND deleted_at IS NULL AND processing_status = 'ready' ORDER BY created_at DESC LIMIT 500`,
+    ).bind(identity.workspaceId).all<RetrievalDocument>();
     const ranked = await rankReferenceDocuments({
       documents,
       query: body.query.trim(),
@@ -67,6 +69,6 @@ export async function POST(request: NextRequest) {
     })), { headers: { "X-Search-Mode": ranked.mode } });
   } catch (error: unknown) {
     const message = error instanceof Error ? error.message : "检索服务发生未知错误";
-    return NextResponse.json({ error: message }, { status: 500 });
+    return NextResponse.json({ error: message }, { status: identityError(error) ? 401 : 500 });
   }
 }

@@ -5,11 +5,19 @@
 ## Cloudflare 架构
 
 - **Cloudflare Workers + OpenNext**：运行 Next.js 页面与 Route Handlers。
-- **D1 (`APP_DB`)**：保存材料正文、元数据、知识资产与生成历史。
-- **R2 (`DOCUMENTS_BUCKET`)**：保存上传的 DOCX 原文件；D1 只保存对象键和可检索正文。
+- **D1 (`APP_DB`)**：保存用户、角色、项目、文件元数据、文稿版本、引用关系与审计记录。
+- **R2 (`DOCUMENTS_BUCKET`)**：保存上传的 DOCX 原文件和项目最终导出文件；D1 保存对象键与可检索正文。
 - **R2 (`NEXT_INC_CACHE_R2_BUCKET`)**：保存 OpenNext 增量缓存。
 
-`wrangler.jsonc` 中的 D1 数据库 ID 是一个安全占位符，不能直接部署。请先创建资源并替换它。
+当前仓库已绑定正式 D1 与 R2 资源；复制项目到其他 Cloudflare 账号时，需要替换对应资源 ID 和存储桶名称。
+
+## 身份与项目档案
+
+- 默认采用单人测试兼容模式，不显示额外登录页。
+- 接入 Cloudflare Access 后，系统读取已验证邮箱，自动记录操作者并执行工作区权限校验。
+- 如需禁止未验证访问，将 Worker 变量 `ACCESS_AUTH_MODE` 设置为 `required`，并先在 Cloudflare Zero Trust 中为站点配置 Access 策略。
+- 每次写作会自动形成项目档案，依次保存任务、提纲、资料片段、AI 初稿、审核稿、最终稿和 DOCX 导出记录。
+- 文件和项目的“删除”默认是可恢复归档；R2 原文件不会被立即物理删除。
 
 ## 首次部署
 

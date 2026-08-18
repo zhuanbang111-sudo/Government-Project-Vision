@@ -3,6 +3,7 @@ import { getDatabase, placeholders } from "../_platform";
 import { loadExternalReferencePassages } from "../_official-sources";
 import { segmentDocumentContent } from "../_retrieval";
 import { getChatCompletionsUrl, getWritingAiSettings } from "../_settings";
+import { identityError, resolveIdentity } from "../_identity";
 
 export async function POST(request: NextRequest) {
   try {
@@ -12,8 +13,9 @@ export async function POST(request: NextRequest) {
     if (!apiKey) return NextResponse.json({ error: "未配置 DEEPSEEK_API_KEY" }, { status: 500 });
     const ids = Array.isArray(selectedIds) ? selectedIds.filter((id): id is number => Number.isInteger(id) && id > 0) : [];
     const db = await getDatabase();
+    const identity = await resolveIdentity(request, db);
     const references = ids.length
-      ? (await db.prepare(`SELECT id, filename, content FROM documents WHERE id IN (${placeholders(ids)})`).bind(...ids).all<{ id: number; filename: string; content: string }>()).results
+      ? (await db.prepare(`SELECT id, filename, content FROM documents WHERE workspace_id = ? AND deleted_at IS NULL AND id IN (${placeholders(ids)})`).bind(identity.workspaceId, ...ids).all<{ id: number; filename: string; content: string }>()).results
       : [];
     const passageSelections = Array.isArray(selectedReferences) ? selectedReferences.flatMap((item) => {
       if (!item || typeof item !== "object") return [];
@@ -45,6 +47,6 @@ export async function POST(request: NextRequest) {
     const raw = payload.choices?.[0]?.message?.content?.replace(/^```json\s*|```$/g, "").trim() || "[]";
     return NextResponse.json(JSON.parse(raw));
   } catch (error: unknown) {
-    return NextResponse.json({ error: error instanceof Error ? error.message : "审查服务错误" }, { status: 500 });
+    return NextResponse.json({ error: error instanceof Error ? error.message : "审查服务错误" }, { status: identityError(error) ? 401 : 500 });
   }
 }

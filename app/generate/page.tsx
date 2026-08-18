@@ -91,6 +91,8 @@ interface ReviewIssue {
 
 export default function GuidedGeneratePage() {
   const [step, setStep] = useState(1);
+  const [projectId, setProjectId] = useState<string | null>(null);
+  const [finalVersionId, setFinalVersionId] = useState<number | null>(null);
 
   // 向导内部表单状态
   const [topic, setTopic] = useState("");
@@ -229,6 +231,15 @@ export default function GuidedGeneratePage() {
       setAnalysis(data.analysis);
       setTaskAssumptions(Array.isArray(data.assumptions) ? data.assumptions : []);
       setConfirmedOutline(data.analysis.recommendedStructure);
+      if (projectId) {
+        const projectResponse = await fetch(`/api/projects/${projectId}`, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ title: data.task.title, documentType: data.task.documentType, task: data.task, outline: data.analysis.recommendedStructure, status: "planning" }) });
+        if (!projectResponse.ok) throw new Error("写作项目更新失败，请刷新后重试");
+      } else {
+        const projectResponse = await fetch("/api/projects", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ title: data.task.title, documentType: data.task.documentType, task: data.task, outline: data.analysis.recommendedStructure }) });
+        const projectData = await projectResponse.json() as { id?: string; error?: string };
+        if (!projectResponse.ok || !projectData.id) throw new Error(projectData.error || "写作项目创建失败");
+        setProjectId(projectData.id);
+      }
     } catch (err: unknown) {
       setError(err instanceof Error ? err.message : "任务分析失败");
     } finally { setLoading(false); }
@@ -243,6 +254,10 @@ export default function GuidedGeneratePage() {
     const recommendationQuery = [task.documentType, task.documentSubtype, task.title, task.department, task.timeRange, task.focus, ...analysis.keywords].filter(Boolean).join(" ");
     setConfirmedOutline(normalizedOutline);
     setTopic(task.title);
+    if (projectId) {
+      const response = await fetch(`/api/projects/${projectId}`, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ title: task.title, documentType: task.documentType, task, outline: normalizedOutline, status: "materials" }) });
+      if (!response.ok) { setError("提纲保存失败，请稍后重试"); return; }
+    }
     setStep(2);
     await triggerSemanticRecommendation(recommendationQuery, normalizedOutline);
   };
@@ -340,6 +355,15 @@ export default function GuidedGeneratePage() {
   };
 
   const handleConfirmCorpus = async () => {
+    if (projectId) {
+      const grouped = [...new Set(selectedPassages.map((item) => item.documentId))].map((documentId) => ({
+        documentId,
+        usageTags: documentUses[documentId] ?? [],
+        selectedPassages: selectedPassages.filter((item) => item.documentId === documentId),
+      }));
+      const response = await fetch(`/api/projects/${projectId}/documents`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ documents: grouped }) });
+      if (!response.ok) { setError("项目语料包保存失败，请稍后重试"); return; }
+    }
     setSelectedOfficialSources([]);
     setStep(3);
     await recommendOfficialSources();
@@ -442,13 +466,18 @@ export default function GuidedGeneratePage() {
           documentType: task.documentType,
           documentSubtype: task.documentSubtype,
           knowledgeRequirements: analysis?.knowledgeRequirement ?? [],
+          projectId,
         }),
       });
-      const data = await res.json() as { text?: string; draftAudit?: DraftAudit; error?: string };
+      const data = await res.json() as { text?: string; draftAudit?: DraftAudit; sources?: unknown[]; error?: string };
       if (!res.ok) throw new Error(data.error || "AI 分段起草失败");
       if (typeof data.text !== "string" || !data.text.trim()) throw new Error("AI 未返回有效草稿");
       setResultDraft(data.text);
       setDraftAudit(data.draftAudit ?? null);
+      if (projectId) {
+        const versionResponse = await fetch(`/api/projects/${projectId}/versions`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ stage: "ai_draft", content: data.text, sources: data.sources ?? [], audit: data.draftAudit ?? {} }) });
+        if (!versionResponse.ok) throw new Error("草稿已生成，但项目版本保存失败");
+      }
     } catch (err: unknown) {
       setError(err instanceof Error ? err.message : "生成草稿失败");
     } finally {
@@ -474,6 +503,7 @@ export default function GuidedGeneratePage() {
       const data: unknown = await res.json();
       if (!res.ok || !Array.isArray(data)) throw new Error((data as { error?: string })?.error || "审查处理故障");
       setReviewIssues(data);
+      if (projectId) await fetch(`/api/projects/${projectId}/versions`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ stage: "reviewed", content: resultDraft, audit: { reviewIssues: data } }) });
     } catch (err: unknown) {
       setReviewError(err instanceof Error ? err.message : "连接超时");
     } finally {
@@ -498,7 +528,7 @@ export default function GuidedGeneratePage() {
   const handleExportDocx = async () => {
     setExporting(true);
     try {
-      const response = await fetch("/api/export-docx", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ title: task.title || topic, content: body }) });
+      const response = await fetch("/api/export-docx", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ title: task.title || topic, content: body, projectId, draftVersionId: finalVersionId }) });
       if (!response.ok) throw new Error("DOCX 导出失败");
       const blob = await response.blob();
       const url = URL.createObjectURL(blob);
@@ -507,6 +537,20 @@ export default function GuidedGeneratePage() {
       URL.revokeObjectURL(url);
     } catch (caught: unknown) { setError(caught instanceof Error ? caught.message : "DOCX 导出失败"); }
     finally { setExporting(false); }
+  };
+
+  const handleFinalize = async () => {
+    setLoading(true); setError(null);
+    try {
+      if (projectId) {
+        const response = await fetch(`/api/projects/${projectId}/versions`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ stage: "final", content: resultDraft, audit: { draftAudit, reviewIssues } }) });
+        const data = await response.json() as { id?: number; error?: string };
+        if (!response.ok || !data.id) throw new Error(data.error || "最终稿归档失败");
+        setFinalVersionId(data.id);
+      }
+      setStep(6);
+    } catch (caught: unknown) { setError(caught instanceof Error ? caught.message : "最终稿归档失败"); }
+    finally { setLoading(false); }
   };
 
   const getBadgeStyle = (dimension: string) => {
@@ -1024,7 +1068,7 @@ export default function GuidedGeneratePage() {
 
           <div className="flex justify-between border-t pt-4">
             <button onClick={() => setStep(4)} className={theme.secondaryBtn}>上一步</button>
-            <button onClick={() => setStep(6)} className={theme.primaryBtn}>最终确认：归档公文</button>
+            <button onClick={handleFinalize} disabled={loading} className={`${theme.primaryBtn} disabled:opacity-50`}>{loading ? "正在归档…" : "最终确认：归档公文"}</button>
           </div>
         </div>
       )}
@@ -1047,7 +1091,7 @@ export default function GuidedGeneratePage() {
           <div className="border-t pt-6 space-x-3">
             <button onClick={() => { navigator.clipboard.writeText(resultDraft); alert("公文已被成功复制。"); }} className={theme.secondaryBtn}>复制公文最终稿</button>
             <button onClick={handleExportDocx} disabled={exporting} className={theme.primaryBtn}>{exporting ? "正在生成 DOCX…" : "下载公文 DOCX"}</button>
-            <button onClick={() => { setStep(1); setTopic(""); setPlanningType("auto"); setShowMoreTypes(false); setSelectedScenarioId(writingTaskPresets.auto.scenarios[0].id); setTaskTopic(""); setSelectedTimeRange(""); setSelectedAudience(""); setSelectedFocuses(writingTaskPresets.auto.focusOptions.slice(0, 4)); setExtraRequirement(""); setTask({ title: "", documentType: "工作报告", documentSubtype: "", department: "", audience: "", purpose: "", timeRange: "", focus: "" }); setAnalysis(null); setTaskAssumptions([]); setConfirmedOutline([]); setPoints(""); setNewData(""); setResultDraft(""); setDraftAudit(null); setOfficialWritingPlan(""); setOfficialCandidates([]); setOfficialSections([]); setSelectedOfficialSources([]); setManualOfficialUrl(""); }} className={theme.primaryBtn}>拟写新篇公文</button>
+            <button onClick={() => { setStep(1); setProjectId(null); setFinalVersionId(null); setTopic(""); setPlanningType("auto"); setShowMoreTypes(false); setSelectedScenarioId(writingTaskPresets.auto.scenarios[0].id); setTaskTopic(""); setSelectedTimeRange(""); setSelectedAudience(""); setSelectedFocuses(writingTaskPresets.auto.focusOptions.slice(0, 4)); setExtraRequirement(""); setTask({ title: "", documentType: "工作报告", documentSubtype: "", department: "", audience: "", purpose: "", timeRange: "", focus: "" }); setAnalysis(null); setTaskAssumptions([]); setConfirmedOutline([]); setPoints(""); setNewData(""); setResultDraft(""); setDraftAudit(null); setOfficialWritingPlan(""); setOfficialCandidates([]); setOfficialSections([]); setSelectedOfficialSources([]); setManualOfficialUrl(""); }} className={theme.primaryBtn}>拟写新篇公文</button>
           </div>
         </div>
       )}

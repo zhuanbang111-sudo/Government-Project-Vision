@@ -1,5 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { AlignmentType, convertMillimetersToTwip, Document, LineRuleType, Packer, Paragraph, TextRun } from "docx";
+import { getPlatformEnv } from "../_platform";
+import { identityError, resolveIdentity, writeActivity } from "../_identity";
 
 const THREE_POINT_SIZE = 32;
 const SECOND_POINT_SIZE = 44;
@@ -67,7 +69,7 @@ function safeFilename(value: string) {
 
 export async function POST(request: NextRequest) {
   try {
-    const body = await readBoundedJson(request) as { title?: unknown; content?: unknown } | null;
+    const body = await readBoundedJson(request) as { title?: unknown; content?: unknown; projectId?: unknown; draftVersionId?: unknown } | null;
     if (typeof body?.title !== "string" || typeof body?.content !== "string" || !body.title.trim() || !body.content.trim()) return NextResponse.json({ error: "标题和正文不能为空" }, { status: 400 });
     if (body.title.length > 200 || body.content.length > MAX_CONTENT_CHARACTERS) return NextResponse.json({ error: "导出内容过大，标题最多 200 字，正文最多 12 万字" }, { status: 413 });
     const paragraphs = body.content.split(/\r?\n/).map((line) => line.trim()).filter(Boolean).map(createContentParagraph);
@@ -97,10 +99,33 @@ export async function POST(request: NextRequest) {
       }],
     });
     const buffer = await Packer.toBuffer(document);
-    return new NextResponse(new Uint8Array(buffer), { headers: { "Content-Type": "application/vnd.openxmlformats-officedocument.wordprocessingml.document", "Content-Disposition": `attachment; filename*=UTF-8''${encodeURIComponent(safeFilename(body.title))}.docx` } });
+    const bytes = new Uint8Array(buffer);
+    const filename = `${safeFilename(body.title)}.docx`;
+    let exportId: string | null = null;
+    if (typeof body.projectId === "string" && body.projectId) {
+      const { APP_DB, DOCUMENTS_BUCKET } = await getPlatformEnv();
+      const identity = await resolveIdentity(request, APP_DB);
+      const project = await APP_DB.prepare("SELECT id, current_version_id FROM writing_projects WHERE id = ? AND workspace_id = ? AND archived_at IS NULL")
+        .bind(body.projectId, identity.workspaceId).first<{ id: string; current_version_id: number | null }>();
+      if (!project) return NextResponse.json({ error: "写作项目不存在或无权访问" }, { status: 404 });
+      exportId = crypto.randomUUID();
+      const hashBytes = await crypto.subtle.digest("SHA-256", bytes);
+      const contentHash = [...new Uint8Array(hashBytes)].map((item) => item.toString(16).padStart(2, "0")).join("");
+      const objectKey = `projects/${body.projectId}/exports/${exportId}.docx`;
+      await DOCUMENTS_BUCKET.put(objectKey, bytes, {
+        httpMetadata: { contentType: "application/vnd.openxmlformats-officedocument.wordprocessingml.document", contentDisposition: `attachment; filename*=UTF-8''${encodeURIComponent(filename)}` },
+        customMetadata: { projectId: body.projectId, exportId, contentHash },
+      });
+      const requestedVersionId = Number.isInteger(body.draftVersionId) ? Number(body.draftVersionId) : project.current_version_id;
+      await APP_DB.prepare(`INSERT INTO project_exports
+        (id, project_id, draft_version_id, object_key, filename, content_hash, file_size, created_by)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)`).bind(exportId, body.projectId, requestedVersionId, objectKey, filename, contentHash, bytes.byteLength, identity.userId).run();
+      await writeActivity(APP_DB, identity, "project.exported_docx", "writing_project", body.projectId, { exportId, filename, fileSize: bytes.byteLength });
+    }
+    return new NextResponse(bytes, { headers: { "Content-Type": "application/vnd.openxmlformats-officedocument.wordprocessingml.document", "Content-Disposition": `attachment; filename*=UTF-8''${encodeURIComponent(filename)}`, ...(exportId ? { "X-Project-Export-Id": exportId } : {}) } });
   } catch (error) {
     if (error instanceof RequestSizeError) return NextResponse.json({ error: error.message }, { status: 413 });
     console.error("DOCX export failed", error);
-    return NextResponse.json({ error: "DOCX 导出失败" }, { status: 500 });
+    return NextResponse.json({ error: error instanceof Error ? error.message : "DOCX 导出失败" }, { status: identityError(error) ? 401 : 500 });
   }
 }

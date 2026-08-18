@@ -5,7 +5,7 @@ import Link from "next/link";
 import { theme } from "./ui-config";
 import { appendDocxFiles, readUploadResponse } from "./upload-client";
 
-type Stats = { documentCount?: number; generatedCount?: number; docCount?: number; genCount?: number };
+type Stats = { documentCount?: number; generatedCount?: number; projectCount?: number; docCount?: number; genCount?: number };
 type UploadResult = { successCount: number; failCount: number; details: Array<{ filename: string; status: string; message: string }> };
 
 export default function HomePage() {
@@ -59,8 +59,9 @@ export default function HomePage() {
       {result && <p className="mt-3 text-xs text-emerald-700">成功 {result.successCount} 份，失败 {result.failCount} 份。</p>}
     </section>
 
-    <section className="grid grid-cols-1 gap-4 sm:grid-cols-2">
-      <div className={theme.card}><p className={theme.muted}>本地参考公文</p><p className="mt-2 text-2xl font-extrabold text-slate-800">{stats.documentCount ?? stats.docCount ?? 0}</p></div>
+    <section className="grid grid-cols-1 gap-4 sm:grid-cols-3">
+      <div className={theme.card}><p className={theme.muted}>参考公文资产</p><p className="mt-2 text-2xl font-extrabold text-slate-800">{stats.documentCount ?? stats.docCount ?? 0}</p></div>
+      <Link href="/projects" className={`${theme.card} block hover:border-teal-200`}><p className={theme.muted}>进行中的写作项目</p><p className="mt-2 text-2xl font-extrabold text-slate-800">{stats.projectCount ?? 0}</p></Link>
       <div className={theme.card}><p className={theme.muted}>已归档生成稿</p><p className="mt-2 text-2xl font-extrabold text-slate-800">{stats.generatedCount ?? stats.genCount ?? 0}</p></div>
     </section>
     <section className={`${theme.card} flex flex-col items-start justify-between gap-4 sm:flex-row sm:items-center`}><div><h2 className="font-bold text-slate-800">引导式智能写作</h2><p className="mt-1 text-xs text-slate-500">定义任务、确认资料、生成草稿并执行合规审查。</p></div><Link href="/generate" className={theme.primaryBtn}>启动写作流程</Link></section>

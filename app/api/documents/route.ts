@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { normalizeDocumentType, normalizeUsageTags } from "../../knowledge";
 import { errorMessage } from "../_shared";
 import { getDatabase } from "../_platform";
+import { identityError, resolveIdentity } from "../_identity";
 
 export async function GET(request: NextRequest) {
   try {
@@ -9,8 +10,10 @@ export async function GET(request: NextRequest) {
     const usageTag = request.nextUrl.searchParams.get("usageTag");
     const status = request.nextUrl.searchParams.get("status");
     const query = request.nextUrl.searchParams.get("query")?.trim();
-    const conditions: string[] = [];
-    const bindings: unknown[] = [];
+    const db = await getDatabase();
+    const identity = await resolveIdentity(request, db);
+    const conditions: string[] = ["workspace_id = ?", "deleted_at IS NULL"];
+    const bindings: unknown[] = [identity.workspaceId];
     if (documentType && documentType !== "all") {
       conditions.push("document_type = ?");
       bindings.push(normalizeDocumentType(documentType));
@@ -29,7 +32,6 @@ export async function GET(request: NextRequest) {
       bindings.push(term, term, term);
     }
     const where = conditions.length ? `WHERE ${conditions.join(" AND ")}` : "";
-    const db = await getDatabase();
     const { results } = await db.prepare(
       `SELECT id, filename, file_type, file_size, department, document_type, usage_tags, topic_tags,
               processing_status, vector_status, verification_status, created_at, updated_at
@@ -37,6 +39,6 @@ export async function GET(request: NextRequest) {
     ).bind(...bindings).all();
     return NextResponse.json(results);
   } catch (error: unknown) {
-    return NextResponse.json({ error: errorMessage(error) }, { status: 500 });
+    return NextResponse.json({ error: errorMessage(error) }, { status: identityError(error) ? 401 : 500 });
   }
 }

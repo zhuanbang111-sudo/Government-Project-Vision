@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { inferKnowledgeMetadata, normalizeDocumentType, normalizeTopicTags, normalizeUsageTags } from "../../knowledge";
 import { getPlatformEnv } from "../_platform";
+import { identityError, resolveIdentity, writeActivity } from "../_identity";
 
 const MAX_DOCX_FILE_BYTES = 8 * 1024 * 1024;
 const MAX_EXTRACTED_CONTENT_CHARS = 1_000_000;
@@ -22,6 +23,7 @@ export async function POST(request: NextRequest) {
     const requestedUsageTags = normalizeUsageTags(formData.get("usageTags"));
     const topicTags = normalizeTopicTags(formData.get("topicTags"));
     const { APP_DB, DOCUMENTS_BUCKET } = await getPlatformEnv();
+    const identity = await resolveIdentity(request, APP_DB);
     const details: Array<{ filename: string; status: "success" | "fail"; message: string; id?: number }> = [];
 
     for (const [index, file] of files.entries()) {
@@ -34,8 +36,8 @@ export async function POST(request: NextRequest) {
         if (typeof extracted !== "string" || typeof fileHash !== "string" || !/^[a-f0-9]{64}$/i.test(fileHash)) {
           throw new Error("文档解析信息无效，请重新选择文件");
         }
-        const duplicate = await APP_DB.prepare("SELECT id, filename FROM documents WHERE content_hash = ? LIMIT 1")
-          .bind(fileHash).first<{ id: number; filename: string }>();
+        const duplicate = await APP_DB.prepare("SELECT id, filename FROM documents WHERE workspace_id = ? AND content_hash = ? AND deleted_at IS NULL LIMIT 1")
+          .bind(identity.workspaceId, fileHash).first<{ id: number; filename: string }>();
         if (duplicate) throw new Error(`该文件与“${duplicate.filename}”内容重复`);
 
         const content = extracted.trim();
@@ -53,8 +55,9 @@ export async function POST(request: NextRequest) {
         const created = await APP_DB.prepare(
           `INSERT INTO documents
             (filename, object_key, file_type, content, department, library_type, file_size, document_type,
-             usage_tags, topic_tags, processing_status, vector_status, verification_status, content_hash, updated_at)
-           VALUES (?, ?, 'docx', ?, ?, 'reference', ?, ?, ?, ?, 'ready', 'pending', 'unverified', ?, CURRENT_TIMESTAMP)`,
+             usage_tags, topic_tags, processing_status, vector_status, verification_status, content_hash, updated_at,
+             workspace_id, owner_user_id)
+           VALUES (?, ?, 'docx', ?, ?, 'reference', ?, ?, ?, ?, 'ready', 'pending', 'unverified', ?, CURRENT_TIMESTAMP, ?, ?)`,
         ).bind(
           file.name,
           objectKey,
@@ -65,6 +68,8 @@ export async function POST(request: NextRequest) {
           JSON.stringify(usageTags),
           JSON.stringify(topicTags),
           fileHash,
+          identity.workspaceId,
+          identity.userId,
         ).run();
         const documentId = Number(created.meta.last_row_id);
         await APP_DB.prepare(
@@ -78,6 +83,10 @@ export async function POST(request: NextRequest) {
           JSON.stringify({ usageTags, topicTags, fileSize: file.size, objectKey, verificationStatus: "unverified" }),
           department,
         ).run();
+        await APP_DB.prepare(`INSERT INTO document_versions
+          (document_id, version_number, object_key, content_hash, file_size, created_by)
+          VALUES (?, 1, ?, ?, ?, ?)`).bind(documentId, objectKey, fileHash, file.size, identity.userId).run();
+        await writeActivity(APP_DB, identity, "document.uploaded", "document", documentId, { filename: file.name, fileSize: file.size, documentType });
         details.push({ filename: file.name, status: "success", message: "原文件已存入 R2，知识元数据已写入 D1", id: documentId });
       } catch (error: unknown) {
         if (objectKey) await DOCUMENTS_BUCKET.delete(objectKey).catch(() => undefined);
@@ -94,6 +103,6 @@ export async function POST(request: NextRequest) {
       details,
     });
   } catch (error: unknown) {
-    return NextResponse.json({ error: errorMessage(error) }, { status: 500 });
+    return NextResponse.json({ error: errorMessage(error) }, { status: identityError(error) ? 401 : 500 });
   }
 }

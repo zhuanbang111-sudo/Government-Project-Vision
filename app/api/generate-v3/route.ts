@@ -5,6 +5,7 @@ import { loadExternalReferencePassages, parseExternalReferences } from "../_offi
 import { rankReferenceDocuments, segmentDocumentContent, type RetrievalDocument } from "../_retrieval";
 import { getChatCompletionsUrl, getWritingAiSettings } from "../_settings";
 import { buildDraftAudit, type DraftSourceEntry } from "./draft-audit";
+import { identityError, resolveIdentity } from "../_identity";
 
 type ParagraphType = { id: number; name: string; description: string };
 const MAX_REFERENCE_DOCUMENTS = 6;
@@ -46,7 +47,7 @@ function parseSelectedReferences(value: unknown): SelectedReference[] {
 export async function POST(request: NextRequest) {
   try {
     const body: unknown = await request.json();
-    const { topic, selectedParagraphs, points = "", newData = "", selectedIds, selectedReferences, externalReferences, documentType = "", documentSubtype = "", knowledgeRequirements = [] } = body as {
+    const { topic, selectedParagraphs, points = "", newData = "", selectedIds, selectedReferences, externalReferences, documentType = "", documentSubtype = "", knowledgeRequirements = [], projectId } = body as {
       topic?: unknown;
       selectedParagraphs?: unknown;
       points?: unknown;
@@ -57,6 +58,7 @@ export async function POST(request: NextRequest) {
       documentType?: unknown;
       documentSubtype?: unknown;
       knowledgeRequirements?: unknown;
+      projectId?: unknown;
     };
     if (typeof topic !== "string" || !topic.trim() || typeof points !== "string" || !Array.isArray(selectedParagraphs) || !selectedParagraphs.length) {
       return NextResponse.json({ error: "主题和完整提纲为必填项" }, { status: 400 });
@@ -82,14 +84,19 @@ export async function POST(request: NextRequest) {
       ? knowledgeRequirements.filter((item): item is string => typeof item === "string")
       : [];
     const db = await getDatabase();
+    const identity = await resolveIdentity(request, db);
+    const linkedProjectId = typeof projectId === "string" && projectId
+      ? (await db.prepare("SELECT id FROM writing_projects WHERE id = ? AND workspace_id = ? AND archived_at IS NULL").bind(projectId, identity.workspaceId).first<{ id: string }>())?.id ?? null
+      : null;
+    if (typeof projectId === "string" && projectId && !linkedProjectId) return NextResponse.json({ error: "写作项目不存在或无权访问" }, { status: 404 });
     const aiSettings = await getWritingAiSettings(db);
     const selectSql = `SELECT id, filename, content, department, document_type, usage_tags, topic_tags,
-      verification_status, vector_data FROM documents WHERE processing_status = 'ready'`;
+      verification_status, vector_data FROM documents WHERE workspace_id = ? AND deleted_at IS NULL AND processing_status = 'ready'`;
     const documents = selectedIdsProvided
       ? ids.length
-        ? (await db.prepare(`${selectSql} AND id IN (${placeholders(ids)})`).bind(...ids).all<RetrievalDocument>()).results
+        ? (await db.prepare(`${selectSql} AND id IN (${placeholders(ids)})`).bind(identity.workspaceId, ...ids).all<RetrievalDocument>()).results
         : []
-      : (await db.prepare(`${selectSql} ORDER BY verification_status DESC, created_at DESC LIMIT 500`).all<RetrievalDocument>()).results;
+      : (await db.prepare(`${selectSql} ORDER BY verification_status DESC, created_at DESC LIMIT 500`).bind(identity.workspaceId).all<RetrievalDocument>()).results;
     const requestedExternalReferences = parseExternalReferences(externalReferences);
 
     const retrievalQuery = `${topic}\n${documentType}\n${documentSubtype}\n${points}\n${requiredUses.join(" ")}`.slice(0, MAX_INPUT_CHARS);
@@ -201,8 +208,8 @@ export async function POST(request: NextRequest) {
     const draftAudit = buildDraftAudit(draft, paragraphs, sourceEntries);
     const referenceIds = [...new Set(sourceEntries.filter((source) => source.kind === "knowledge").map((source) => source.id as number))];
     const sources = sourceEntries.map((source) => `${source.marker}. [${source.filename}]${source.publisher ? `｜${source.publisher}` : ""}${source.passageIndex !== undefined ? `｜原文第${source.passageIndex + 1}段` : ""}${source.section ? `｜用于“${source.section}”` : ""}${source.url ? `｜${source.url}` : ""}（${source.verified ? "已核验" : "未核验"}）`).join("\n") || "未使用参考文件";
-    await db.prepare("INSERT INTO generations (content, doc_type, topic, reference_ids) VALUES (?, ?, ?, ?)")
-      .bind(draft, typeof documentType === "string" && documentType ? documentType : "guided", topic.trim(), JSON.stringify(sourceEntries)).run();
+    const generation = await db.prepare("INSERT INTO generations (content, doc_type, topic, reference_ids, project_id, created_by) VALUES (?, ?, ?, ?, ?, ?)")
+      .bind(draft, typeof documentType === "string" && documentType ? documentType : "guided", topic.trim(), JSON.stringify(sourceEntries), linkedProjectId, identity.userId).run();
     return NextResponse.json({
       text: `${draft}\n\n--- 参考来源列表 ---\n${sources}`,
       referenceIds,
@@ -210,6 +217,7 @@ export async function POST(request: NextRequest) {
       sources: sourceEntries,
       referenceAudit: sourceEntries,
       draftAudit,
+      generationId: Number(generation.meta.last_row_id),
     });
   } catch (error: unknown) {
     console.error("generate-v3 failed", error);
@@ -219,6 +227,6 @@ export async function POST(request: NextRequest) {
     }
     const message = error instanceof Error ? error.message : "生成服务发生未知错误";
     const unavailable = error instanceof DOMException || /超时|fetch|network|ECONN|ENOTFOUND/i.test(message);
-    return NextResponse.json({ error: message, retryable: unavailable }, { status: unavailable ? 503 : 500 });
+    return NextResponse.json({ error: message, retryable: unavailable }, { status: identityError(error) ? 401 : unavailable ? 503 : 500 });
   }
 }

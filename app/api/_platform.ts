@@ -13,9 +13,10 @@ export type D1DatabaseLike = {
 };
 
 type R2BucketLike = {
-  put: (key: string, value: ArrayBuffer, options?: { httpMetadata?: { contentType?: string } }) => Promise<unknown>;
+  put: (key: string, value: ArrayBuffer | Uint8Array, options?: { httpMetadata?: { contentType?: string; contentDisposition?: string }; customMetadata?: Record<string, string> }) => Promise<unknown>;
   delete: (key: string) => Promise<void>;
   head: (key: string) => Promise<unknown>;
+  get: (key: string) => Promise<{ arrayBuffer: () => Promise<ArrayBuffer>; httpEtag?: string } | null>;
 };
 
 type PlatformEnv = {
