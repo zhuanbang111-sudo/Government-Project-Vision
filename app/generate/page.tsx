@@ -54,11 +54,22 @@ interface OfficialSourceCandidate {
   id: string;
   title: string;
   url: string;
-  snippet: string;
+  publisher?: string;
+  publishedAt?: string;
+  excerpt?: string;
   section: string;
   reason: string;
   uses: string[];
+  relevanceScore?: number;
+  source?: SelectedOfficialSource;
   sourceType: "政府官网";
+}
+
+interface OfficialSectionStatus {
+  section: string;
+  localStatus: "covered" | "weak" | "missing";
+  externalStatus: "not-needed" | "supplemented" | "unresolved";
+  sourceIds: string[];
 }
 
 interface SelectedOfficialSource {
@@ -107,6 +118,7 @@ export default function GuidedGeneratePage() {
   const [draftAudit, setDraftAudit] = useState<DraftAudit | null>(null);
   const [officialWritingPlan, setOfficialWritingPlan] = useState("");
   const [officialCandidates, setOfficialCandidates] = useState<OfficialSourceCandidate[]>([]);
+  const [officialSections, setOfficialSections] = useState<OfficialSectionStatus[]>([]);
   const [selectedOfficialSources, setSelectedOfficialSources] = useState<SelectedOfficialSource[]>([]);
   const [officialLoading, setOfficialLoading] = useState(false);
   const [officialError, setOfficialError] = useState<string | null>(null);
@@ -300,6 +312,7 @@ export default function GuidedGeneratePage() {
     setOfficialLoading(true);
     setOfficialError(null);
     setOfficialCandidates([]);
+    setOfficialSections([]);
     try {
       const response = await fetch("/api/official-sources/recommend", {
         method: "POST",
@@ -311,10 +324,12 @@ export default function GuidedGeneratePage() {
           coverage: outlineCoverage.map(({ section, status }) => ({ section, status })),
         }),
       });
-      const data = await response.json() as { writingPlan?: string; candidates?: OfficialSourceCandidate[]; warning?: string | null; error?: string };
+      const data = await response.json() as { writingPlan?: string; candidates?: OfficialSourceCandidate[]; autoSelectedSources?: SelectedOfficialSource[]; sections?: OfficialSectionStatus[]; warning?: string | null; error?: string };
       if (!response.ok) throw new Error(data.error || "官方素材推荐失败");
       setOfficialWritingPlan(data.writingPlan || `围绕“${topic}”按确认提纲成文，优先使用已选历史片段，对缺少依据的章节保留待补充标记。`);
       setOfficialCandidates(Array.isArray(data.candidates) ? data.candidates : []);
+      setOfficialSections(Array.isArray(data.sections) ? data.sections : []);
+      setSelectedOfficialSources(Array.isArray(data.autoSelectedSources) ? data.autoSelectedSources : []);
       setOfficialError(data.warning || null);
     } catch (caught: unknown) {
       setOfficialWritingPlan(`围绕“${topic}”按确认提纲成文，优先使用已选历史片段，对缺少依据的章节保留待补充标记。`);
@@ -331,6 +346,15 @@ export default function GuidedGeneratePage() {
   };
 
   const selectOfficialCandidate = async (candidate: OfficialSourceCandidate) => {
+    if (candidate.source) {
+      setSelectedOfficialSources((current) => {
+        const withoutCurrent = current.filter((item) => item.url !== candidate.source!.url);
+        const remaining = 18 - withoutCurrent.reduce((sum, item) => sum + item.passages.length, 0);
+        if (remaining <= 0) { setOfficialError("单次最多选用 18 个政府官网引用片段，请先移除部分来源"); return current; }
+        return [...withoutCurrent, { ...candidate.source!, passages: candidate.source!.passages.slice(0, remaining) }];
+      });
+      return;
+    }
     setFetchingOfficialUrls((current) => [...current, candidate.url]);
     setOfficialError(null);
     try {
@@ -817,41 +841,43 @@ export default function GuidedGeneratePage() {
               <h4 className="font-bold text-teal-900">AI 写作计划摘要</h4>
               <button type="button" disabled={officialLoading} onClick={recommendOfficialSources} className="text-[10px] font-semibold text-teal-700 hover:underline disabled:opacity-50">重新分析</button>
             </div>
-            <p className="mt-2 leading-6">{officialLoading ? "正在分析提纲覆盖缺口并检索政府官网索引…" : officialWritingPlan || "系统将根据已确认提纲和历史语料自动组织写作。"}</p>
+            <p className="mt-2 leading-6">{officialLoading ? "正在识别薄弱章节，并逐页提取、校验和匹配政府官网正文…" : officialWritingPlan || "系统将根据已确认提纲和历史语料自动组织写作。"}</p>
           </section>
 
           <section className="space-y-3 rounded border border-slate-200 p-4">
             <div>
-              <h4 className="text-sm font-bold text-slate-800">政府官网补充素材（可选）</h4>
-              <p className="mt-1 text-[10px] text-slate-500">此处只展示搜索索引中的标题、摘要和链接；只有点击“选用并提取”后，系统才会读取该网页正文。</p>
+              <h4 className="text-sm font-bold text-slate-800">章节依据补充</h4>
+              <p className="mt-1 text-[10px] text-slate-500">AI只检索历史语料覆盖不足的章节，并自动过滤搜索页、备案页和无关网页。通过正文校验的最佳来源已自动选用。</p>
             </div>
             {officialError && <p className="rounded border border-amber-200 bg-amber-50 p-2 text-[10px] text-amber-800">{officialError}</p>}
-            {!officialLoading && officialCandidates.length === 0 && !officialError && <p className="py-4 text-center text-xs text-slate-400">本次未发现必须补充的政府官网素材，可直接生成。</p>}
-            <div className="space-y-2">
-              {officialCandidates.map((candidate) => {
-                const selected = selectedOfficialSources.some((item) => item.url === candidate.url);
-                const fetching = fetchingOfficialUrls.includes(candidate.url);
-                return <article key={candidate.url} className="rounded border border-slate-200 bg-white p-3 text-xs">
-                  <div className="flex items-start justify-between gap-4">
-                    <div className="min-w-0 flex-1">
-                      <div className="flex flex-wrap items-center gap-2"><span className="rounded bg-red-50 px-2 py-0.5 text-[10px] font-semibold text-red-700">政府官网</span><span className="text-[10px] text-teal-700">建议用于：{candidate.section}</span></div>
-                      <a href={candidate.url} target="_blank" rel="noreferrer" className="mt-2 block font-semibold text-slate-800 hover:text-teal-700 hover:underline">{candidate.title}</a>
-                      <p className="mt-1 line-clamp-2 leading-5 text-slate-500">{candidate.snippet || candidate.reason}</p>
-                      <p className="mt-1 text-[10px] text-slate-400">推荐原因：{candidate.reason}</p>
-                    </div>
-                    <button type="button" disabled={selected || fetching} onClick={() => selectOfficialCandidate(candidate)} className="shrink-0 rounded border border-teal-200 px-3 py-2 text-[10px] font-semibold text-teal-700 disabled:bg-slate-50 disabled:text-slate-400">{selected ? "已选用" : fetching ? "正在提取…" : "选用并提取"}</button>
-                  </div>
+            {!officialLoading && officialSections.length === 0 && !officialError && <p className="py-4 text-center text-xs text-slate-400">本次没有需要外部补充的章节，可直接生成。</p>}
+            <div className="space-y-3">
+              {officialSections.map((item) => {
+                const sources = selectedOfficialSources.filter((source) => source.passages.some((passage) => passage.section === item.section));
+                const alternatives = officialCandidates.filter((candidate) => candidate.section === item.section);
+                const label = item.externalStatus === "supplemented" ? "已自动补充" : item.externalStatus === "unresolved" ? "待核验" : "历史语料已覆盖";
+                const labelStyle = item.externalStatus === "supplemented" ? "bg-emerald-50 text-emerald-700" : item.externalStatus === "unresolved" ? "bg-amber-50 text-amber-700" : "bg-slate-100 text-slate-500";
+                return <article key={item.section} className="rounded border border-slate-200 bg-white p-3 text-xs">
+                  <div className="flex items-center justify-between gap-3"><h5 className="font-semibold text-slate-800">{item.section}</h5><span className={`shrink-0 rounded px-2 py-0.5 text-[9px] font-semibold ${labelStyle}`}>{label}</span></div>
+                  {sources.map((source) => {
+                    const passage = source.passages.find((value) => value.section === item.section) ?? source.passages[0];
+                    return <div key={source.id} className="mt-3 rounded border border-emerald-100 bg-emerald-50/30 p-3">
+                      <div className="flex items-start justify-between gap-3"><div className="min-w-0"><a href={source.url} target="_blank" rel="noreferrer" className="font-semibold text-slate-800 hover:text-teal-700 hover:underline">{source.title}</a><p className="mt-1 text-[9px] text-slate-400">{source.publisher}{source.publishedAt ? `｜${source.publishedAt}` : ""}｜正文已留存哈希</p></div><button type="button" onClick={() => setSelectedOfficialSources((current) => current.filter((value) => value.id !== source.id))} className="shrink-0 text-[9px] text-red-600 hover:underline">不采用</button></div>
+                      {passage && <div className="mt-2 border-l-2 border-emerald-300 pl-3"><p className="line-clamp-3 leading-5 text-slate-600">{passage.text}</p><p className="mt-1 text-[9px] text-teal-700">命中原因：{passage.matchReasons.join("、")}｜匹配度 {Math.round(passage.score * 100)}%</p></div>}
+                    </div>;
+                  })}
+                  {item.externalStatus === "unresolved" && <p className="mt-2 text-[10px] leading-5 text-amber-700">未找到足够相关且可核验的政府官网正文；生成时将保留待核验提示，不会填入无关内容。</p>}
+                  {alternatives.length > 0 && <details className="mt-2"><summary className="cursor-pointer text-[10px] text-slate-500">查看 {alternatives.length} 个已验证备选来源</summary><div className="mt-2 space-y-2">{alternatives.map((candidate) => {
+                    const selected = selectedOfficialSources.some((source) => source.url === candidate.url);
+                    return <div key={candidate.url} className="rounded border border-slate-100 p-2"><div className="flex items-start justify-between gap-3"><div className="min-w-0"><a href={candidate.url} target="_blank" rel="noreferrer" className="font-semibold text-slate-700 hover:underline">{candidate.title}</a><p className="mt-1 line-clamp-2 text-[10px] leading-5 text-slate-500">{candidate.excerpt}</p></div><button type="button" disabled={selected} onClick={() => selectOfficialCandidate(candidate)} className="shrink-0 rounded border border-teal-200 px-2 py-1 text-[9px] text-teal-700 disabled:text-slate-400">{selected ? "已采用" : "采用"}</button></div></div>;
+                  })}</div></details>}
                 </article>;
               })}
             </div>
-            <div className="flex gap-2 border-t border-slate-100 pt-3">
-              <input type="url" autoComplete="url" placeholder="未找到合适候选时，可粘贴 https://…gov.cn 官方页面" value={manualOfficialUrl} onChange={(event) => setManualOfficialUrl(event.target.value)} className={theme.input} />
-              <button type="button" disabled={!manualOfficialUrl.trim() || fetchingOfficialUrls.includes(manualOfficialUrl.trim())} onClick={() => selectOfficialCandidate({ id: "manual", title: "手动选用的政府官网材料", url: manualOfficialUrl.trim(), snippet: "", section: outlineCoverage.find((item) => item.status !== "covered")?.section || confirmedOutline[0] || "全文", reason: "用户指定的政府官网公开材料", uses: ["facts", "policy"], sourceType: "政府官网" })} className={`${theme.secondaryBtn} shrink-0 disabled:opacity-50`}>校验并选用</button>
-            </div>
-            {selectedOfficialSources.length > 0 && <div className="rounded border border-emerald-200 bg-emerald-50/50 p-3 text-[10px] text-emerald-900">
-              <p className="font-semibold">已选用 {selectedOfficialSources.length} 个政府官网来源、{selectedOfficialSources.reduce((sum, item) => sum + item.passages.length, 0)} 个命中片段</p>
-              <div className="mt-2 space-y-1">{selectedOfficialSources.map((source) => <div key={source.id} className="flex items-center justify-between gap-3"><span className="truncate">{source.publisher}｜{source.title}｜已保存内容哈希</span><button type="button" onClick={() => setSelectedOfficialSources((current) => current.filter((item) => item.id !== source.id))} className="shrink-0 text-red-600 hover:underline">移除</button></div>)}</div>
-            </div>}
+            <details className="border-t border-slate-100 pt-3">
+              <summary className="cursor-pointer text-[10px] font-semibold text-slate-500">没有找到合适来源？手动添加政府官网正文</summary>
+              <div className="mt-3 flex gap-2"><input type="url" autoComplete="url" placeholder="粘贴 https://…gov.cn 文章页面" value={manualOfficialUrl} onChange={(event) => setManualOfficialUrl(event.target.value)} className={theme.input} /><button type="button" disabled={!manualOfficialUrl.trim() || fetchingOfficialUrls.includes(manualOfficialUrl.trim())} onClick={() => selectOfficialCandidate({ id: "manual", title: "手动选用的政府官网材料", url: manualOfficialUrl.trim(), section: outlineCoverage.find((item) => item.status !== "covered")?.section || confirmedOutline[0] || "全文", reason: "用户指定的政府官网公开材料", uses: ["facts", "policy"], sourceType: "政府官网" })} className={`${theme.secondaryBtn} shrink-0 disabled:opacity-50`}>{fetchingOfficialUrls.includes(manualOfficialUrl.trim()) ? "正在校验…" : "校验并采用"}</button></div>
+            </details>
           </section>
 
           <details className="rounded border border-slate-200 p-4">
@@ -1021,7 +1047,7 @@ export default function GuidedGeneratePage() {
           <div className="border-t pt-6 space-x-3">
             <button onClick={() => { navigator.clipboard.writeText(resultDraft); alert("公文已被成功复制。"); }} className={theme.secondaryBtn}>复制公文最终稿</button>
             <button onClick={handleExportDocx} disabled={exporting} className={theme.primaryBtn}>{exporting ? "正在生成 DOCX…" : "下载公文 DOCX"}</button>
-            <button onClick={() => { setStep(1); setTopic(""); setPlanningType("auto"); setShowMoreTypes(false); setSelectedScenarioId(writingTaskPresets.auto.scenarios[0].id); setTaskTopic(""); setSelectedTimeRange(""); setSelectedAudience(""); setSelectedFocuses(writingTaskPresets.auto.focusOptions.slice(0, 4)); setExtraRequirement(""); setTask({ title: "", documentType: "工作报告", documentSubtype: "", department: "", audience: "", purpose: "", timeRange: "", focus: "" }); setAnalysis(null); setTaskAssumptions([]); setConfirmedOutline([]); setPoints(""); setNewData(""); setResultDraft(""); setDraftAudit(null); setOfficialWritingPlan(""); setOfficialCandidates([]); setSelectedOfficialSources([]); setManualOfficialUrl(""); }} className={theme.primaryBtn}>拟写新篇公文</button>
+            <button onClick={() => { setStep(1); setTopic(""); setPlanningType("auto"); setShowMoreTypes(false); setSelectedScenarioId(writingTaskPresets.auto.scenarios[0].id); setTaskTopic(""); setSelectedTimeRange(""); setSelectedAudience(""); setSelectedFocuses(writingTaskPresets.auto.focusOptions.slice(0, 4)); setExtraRequirement(""); setTask({ title: "", documentType: "工作报告", documentSubtype: "", department: "", audience: "", purpose: "", timeRange: "", focus: "" }); setAnalysis(null); setTaskAssumptions([]); setConfirmedOutline([]); setPoints(""); setNewData(""); setResultDraft(""); setDraftAudit(null); setOfficialWritingPlan(""); setOfficialCandidates([]); setOfficialSections([]); setSelectedOfficialSources([]); setManualOfficialUrl(""); }} className={theme.primaryBtn}>拟写新篇公文</button>
           </div>
         </div>
       )}
