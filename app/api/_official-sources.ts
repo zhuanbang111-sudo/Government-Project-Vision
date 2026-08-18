@@ -80,7 +80,7 @@ export function extractOfficialPage(html: string, fallbackTitle = "") {
     || stripHtml(html.match(/<title[^>]*>([\s\S]*?)<\/title>/i)?.[1] ?? "")
     || fallbackTitle;
   const title = rawTitle.replace(/\s*[-_|｜].*?政府.*$/u, "").trim().slice(0, 240) || "政府网站公开资料";
-  const publisher = metaContent(html, ["author", "source", "SiteName", "og:site_name"]).slice(0, 120);
+  const publisher = metaContent(html, ["source", "SiteName", "og:site_name", "author"]).slice(0, 120);
   const publishedAt = metaContent(html, ["PubDate", "publishdate", "publishDate", "article:published_time", "date"])
     || html.match(/(?:发布时间|发布日期|成文日期)[：:]?\s*(\d{4}[年\-/]\d{1,2}[月\-/]\d{1,2}日?)/)?.[1]
     || "";
