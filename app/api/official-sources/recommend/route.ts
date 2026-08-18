@@ -163,7 +163,13 @@ export async function POST(request: NextRequest) {
     const unresolved = sections.filter((item) => item.externalStatus === "unresolved").map((item) => item.section);
     return NextResponse.json({
       writingPlan: plan.summary, candidates, autoSelectedSources: autoSelected.map((item) => item.source), sections,
-      searchAudit: plan.gaps.map((gap, index) => ({ section: gap.section, query: gap.query, indexedCount: searchSettled[index].status === "fulfilled" ? searchSettled[index].value.length : 0, validatedCount: validated.filter((item) => item.section === gap.section).length })),
+      searchAudit: plan.gaps.map((gap, index) => ({
+        section: gap.section,
+        query: gap.query,
+        indexedCount: searchSettled[index].status === "fulfilled" ? searchSettled[index].value.length : 0,
+        validatedCount: validated.filter((item) => item.section === gap.section).length,
+        searchError: searchSettled[index].status === "rejected" ? (searchSettled[index].reason instanceof Error ? searchSettled[index].reason.message : "官网索引暂不可用") : null,
+      })),
       rejectedCount: validationSettled.filter((item) => item.status === "rejected").length,
       warning: unresolved.length ? `“${unresolved.join("、")}”未找到足够相关且可核验的政府官网正文，系统将保留待核验提示，不会用无关网页填充。` : null,
     });
