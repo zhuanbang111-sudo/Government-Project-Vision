@@ -36,6 +36,7 @@ export async function POST(request: NextRequest, context: RouteContext<"/api/pro
     const db = await getDatabase();
     const identity = await resolveIdentity(request, db);
     const project = await requireProjectAccess(db, identity, projectId, "owner");
+    if (project.archived_at) return NextResponse.json({ error: "归档项目为只读，请恢复后再调整成员" }, { status: 409 });
     if (userId === project.owner_user_id) return NextResponse.json({ error: "项目负责人无需重复添加" }, { status: 400 });
     const available = await db.prepare(`SELECT u.id FROM workspace_members wm JOIN users u ON u.id = wm.user_id
       WHERE wm.workspace_id = ? AND u.id = ? AND u.status = 'active'`).bind(identity.workspaceId, userId).first();
@@ -58,7 +59,8 @@ export async function DELETE(request: NextRequest, context: RouteContext<"/api/p
     if (!userId) return NextResponse.json({ error: "缺少成员 ID" }, { status: 400 });
     const db = await getDatabase();
     const identity = await resolveIdentity(request, db);
-    await requireProjectAccess(db, identity, projectId, "owner");
+    const project = await requireProjectAccess(db, identity, projectId, "owner");
+    if (project.archived_at) return NextResponse.json({ error: "归档项目为只读，请恢复后再调整成员" }, { status: 409 });
     const result = await db.prepare("DELETE FROM project_members WHERE project_id = ? AND user_id = ?").bind(projectId, userId).run();
     if (!result.meta.changes) return NextResponse.json({ error: "项目成员不存在" }, { status: 404 });
     await writeActivity(db, identity, "project.member_removed", "writing_project", projectId, { userId });
@@ -68,4 +70,3 @@ export async function DELETE(request: NextRequest, context: RouteContext<"/api/p
     return NextResponse.json({ error: errorMessage(error) }, { status });
   }
 }
-

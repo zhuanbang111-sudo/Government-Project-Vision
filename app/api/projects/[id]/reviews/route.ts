@@ -22,7 +22,8 @@ export async function POST(request: NextRequest, context: RouteContext<"/api/pro
     if (!Number.isInteger(versionId) || versionId <= 0) return NextResponse.json({ error: "请选择有效的送审版本" }, { status: 400 });
     const db = await getDatabase();
     const identity = await resolveIdentity(request, db);
-    await requireProjectAccess(db, identity, projectId, "editor");
+    const project = await requireProjectAccess(db, identity, projectId, "editor");
+    if (project.archived_at) return NextResponse.json({ error: "归档项目为只读，请恢复后再送审" }, { status: 409 });
     const version = await db.prepare("SELECT id, content, source_snapshot FROM draft_versions WHERE id = ? AND project_id = ?")
       .bind(versionId, projectId).first<{ id: number; content: string; source_snapshot: string }>();
     if (!version) return NextResponse.json({ error: "送审版本不存在" }, { status: 404 });

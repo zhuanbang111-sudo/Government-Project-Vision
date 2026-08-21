@@ -15,7 +15,7 @@ type ReviewComment = { id: string; review_request_id: string; anchor_text: strin
 type CitationCheck = { id: number; review_request_id: string; marker: string; status: "valid" | "unverified" | "missing"; source_title: string | null; details: string };
 type DiffItem = { type: "unchanged" | "added" | "removed"; text: string };
 type ProjectDetail = {
-  project?: { id: string; title: string; document_type: string; status: string; owner_name: string; current_version_id: number | null; created_at: string; updated_at: string };
+  project?: { id: string; title: string; document_type: string; status: string; owner_name: string; current_version_id: number | null; created_at: string; updated_at: string; archived_at: string | null };
   permission?: Permission;
   versions?: Version[]; documents?: ProjectDocument[]; members?: Member[]; reviews?: Review[]; comments?: ReviewComment[]; citationChecks?: CitationCheck[];
   versionComparison?: { fromVersionId: number; toVersionId: number; added: number; removed: number; changes: DiffItem[] } | null;
@@ -87,9 +87,10 @@ export default function ProjectDetailPage() {
   const reviewComments = useMemo(() => data?.comments?.filter((item) => item.review_request_id === latestReview?.id) ?? [], [data?.comments, latestReview?.id]);
   const citationChecks = useMemo(() => data?.citationChecks?.filter((item) => item.review_request_id === latestReview?.id) ?? [], [data?.citationChecks, latestReview?.id]);
   const permission = data?.permission ?? "viewer";
-  const canEdit = permissionRank[permission] >= permissionRank.editor;
-  const canReview = permissionRank[permission] >= permissionRank.reviewer;
-  const canManage = permission === "owner";
+  const isArchived = Boolean(data?.project?.archived_at);
+  const canEdit = !isArchived && permissionRank[permission] >= permissionRank.editor;
+  const canReview = !isArchived && permissionRank[permission] >= permissionRank.reviewer;
+  const canManage = !isArchived && permission === "owner";
 
   const perform = async (operation: () => Promise<void>) => {
     setBusy(true); setError(null);
@@ -137,6 +138,20 @@ export default function ProjectDetailPage() {
     if (!response.ok) throw new Error("移除成员失败");
     await refreshMembers();
   });
+  const restoreProject = () => perform(async () => {
+    const response = await fetch(`/api/projects/${params.id}`, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ action: "restore" }) });
+    const payload = await response.json() as { error?: string };
+    if (!response.ok) throw new Error(payload.error || "项目恢复失败");
+  });
+  const duplicateProject = async () => {
+    setBusy(true); setError(null);
+    try {
+      const response = await fetch(`/api/projects/${params.id}/duplicate`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({}) });
+      const payload = await response.json() as { id?: string; error?: string };
+      if (!response.ok || !payload.id) throw new Error(payload.error || "新项目创建失败");
+      window.location.assign(`/generate?projectId=${encodeURIComponent(payload.id)}`);
+    } catch (caught: unknown) { setError(caught instanceof Error ? caught.message : "新项目创建失败"); setBusy(false); }
+  };
   const exportFinal = async () => {
     const version = data?.versions?.find((item) => item.stage === "final") ?? data?.versions?.[0];
     if (!data?.project || !version) return;
@@ -154,7 +169,8 @@ export default function ProjectDetailPage() {
   if (error && !data?.project) return <div className="mx-auto max-w-5xl rounded border border-red-200 bg-red-50 p-5 text-sm text-red-700">{error}</div>;
   if (!data?.project) return <div className="mx-auto max-w-5xl py-16 text-center text-xs text-slate-400">正在读取完整档案…</div>;
   return <div className="mx-auto max-w-6xl space-y-6">
-    <header><Link href="/projects" className="text-xs text-teal-700 hover:underline">← 返回项目列表</Link><div className="mt-3 flex flex-col justify-between gap-3 sm:flex-row sm:items-end"><div><p className="text-xs font-bold text-teal-700">{data.project.document_type} · {permission === "owner" ? "项目负责人" : permission === "reviewer" ? "审核人员" : permission === "editor" ? "协作编辑" : "只读成员"}</p><h1 className={`${theme.title} mt-1`}>{data.project.title}</h1><p className="mt-2 text-[10px] text-slate-400">负责人：{data.project.owner_name}｜更新于 {new Date(data.project.updated_at).toLocaleString("zh-CN")}</p></div>{data.project.status === "completed" && <button onClick={exportFinal} disabled={busy} className={theme.primaryBtn}>生成并归档最终 DOCX</button>}</div></header>
+    <header><Link href="/projects" className="text-xs text-teal-700 hover:underline">← 返回项目列表</Link><div className="mt-3 flex flex-col justify-between gap-3 sm:flex-row sm:items-end"><div><p className="text-xs font-bold text-teal-700">{data.project.document_type} · {isArchived ? "只读归档" : permission === "owner" ? "项目负责人" : permission === "reviewer" ? "审核人员" : permission === "editor" ? "协作编辑" : "只读成员"}</p><h1 className={`${theme.title} mt-1`}>{data.project.title}</h1><p className="mt-2 text-[10px] text-slate-400">负责人：{data.project.owner_name}｜更新于 {new Date(data.project.updated_at).toLocaleString("zh-CN")}{isArchived && data.project.archived_at ? `｜归档于 ${new Date(data.project.archived_at).toLocaleString("zh-CN")}` : ""}</p></div><div className="flex flex-wrap gap-2">{isArchived && <><button onClick={() => void duplicateProject()} disabled={busy} className={theme.primaryBtn}>基于此项目新建</button>{permission === "owner" && <button onClick={() => void restoreProject()} disabled={busy} className={theme.secondaryBtn}>恢复项目</button>}</>}{data.project.status === "completed" && <button onClick={exportFinal} disabled={busy} className={theme.primaryBtn}>生成并归档最终 DOCX</button>}</div></div></header>
+    {isArchived && <section className="rounded border border-amber-200 bg-amber-50 px-4 py-3 text-xs leading-5 text-amber-800">该项目已归档，正文、版本、来源、审核记录和 DOCX 均以只读方式保留。需要继续修改时，请先恢复项目；需要起草同类材料时，可直接基于此项目新建。</section>}
     {error && <p className="rounded border border-red-200 bg-red-50 p-3 text-xs text-red-700">{error}</p>}
 
     <section className={`${theme.card} space-y-4`}><div className="flex items-center justify-between"><div><p className="text-[10px] font-bold text-teal-700">协同审核</p><h2 className="mt-1 font-bold text-slate-800">{latestReview ? reviewLabel[latestReview.status] ?? latestReview.status : "尚未提交审核"}</h2></div>{latestReview && <span className="rounded bg-slate-100 px-2 py-1 text-[9px] text-slate-600">送审 V{data.versions?.find((item) => item.id === latestReview.version_id)?.version_number ?? "-"}</span>}</div>

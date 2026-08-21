@@ -78,9 +78,25 @@ export async function GET(request: NextRequest, context: RouteContext<"/api/proj
 export async function PATCH(request: NextRequest, context: RouteContext<"/api/projects/[id]">) {
   try {
     const id = (await context.params).id;
-    const body = await request.json().catch(() => null) as { title?: unknown; documentType?: unknown; status?: unknown; task?: unknown; outline?: unknown } | null;
+    const body = await request.json().catch(() => null) as { action?: unknown; title?: unknown; documentType?: unknown; status?: unknown; task?: unknown; outline?: unknown } | null;
     const db = await getDatabase();
     const identity = await resolveIdentity(request, db);
+    if (body?.action === "restore") {
+      await requireProjectAccess(db, identity, id, "owner");
+      const restored = await db.prepare(`UPDATE writing_projects SET archived_at = NULL,
+          status = CASE
+            WHEN EXISTS (SELECT 1 FROM draft_versions WHERE project_id = ? AND stage = 'final') THEN 'completed'
+            WHEN EXISTS (SELECT 1 FROM review_requests WHERE project_id = ? AND status = 'pending') THEN 'review'
+            WHEN EXISTS (SELECT 1 FROM draft_versions WHERE project_id = ?) THEN 'drafting'
+            WHEN EXISTS (SELECT 1 FROM project_documents WHERE project_id = ?) THEN 'materials'
+            ELSE 'planning' END,
+          updated_at = CURRENT_TIMESTAMP
+        WHERE id = ? AND workspace_id = ? AND archived_at IS NOT NULL`)
+        .bind(id, id, id, id, id, identity.workspaceId).run();
+      if (!restored.meta.changes) return NextResponse.json({ error: "项目不存在或尚未归档" }, { status: 404 });
+      await writeActivity(db, identity, "project.restored", "writing_project", id);
+      return NextResponse.json({ success: true, restored: true });
+    }
     await requireProjectAccess(db, identity, id, "editor");
     const current = await db.prepare("SELECT id, title, document_type, status FROM writing_projects WHERE id = ? AND workspace_id = ? AND archived_at IS NULL")
       .bind(id, identity.workspaceId).first<{ id: string; title: string; document_type: string; status: string }>();

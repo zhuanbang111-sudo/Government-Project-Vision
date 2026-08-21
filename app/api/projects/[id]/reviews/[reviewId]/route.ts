@@ -11,7 +11,8 @@ export async function PATCH(request: NextRequest, context: RouteContext<"/api/pr
     if (action !== "approve" && action !== "request_changes" && action !== "cancel") return NextResponse.json({ error: "无效审核操作" }, { status: 400 });
     const db = await getDatabase();
     const identity = await resolveIdentity(request, db);
-    await requireProjectAccess(db, identity, projectId, action === "cancel" ? "editor" : "reviewer");
+    const project = await requireProjectAccess(db, identity, projectId, action === "cancel" ? "editor" : "reviewer");
+    if (project.archived_at) return NextResponse.json({ error: "归档项目为只读，请恢复后再处理审核" }, { status: 409 });
     const review = await db.prepare(`SELECT r.id, r.version_id, r.requested_by, r.assigned_to, r.status,
         v.content, v.source_snapshot, v.audit_json
       FROM review_requests r JOIN draft_versions v ON v.id = r.version_id
@@ -54,4 +55,3 @@ export async function PATCH(request: NextRequest, context: RouteContext<"/api/pr
     return NextResponse.json({ error: errorMessage(error) }, { status });
   }
 }
-

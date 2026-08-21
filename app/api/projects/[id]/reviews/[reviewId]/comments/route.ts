@@ -16,7 +16,8 @@ export async function POST(request: NextRequest, context: RouteContext<"/api/pro
     const severity = typeof body?.severity === "string" && severities.includes(body.severity as typeof severities[number]) ? body.severity : "suggestion";
     const db = await getDatabase();
     const identity = await resolveIdentity(request, db);
-    await requireProjectAccess(db, identity, projectId, "reviewer");
+    const project = await requireProjectAccess(db, identity, projectId, "reviewer");
+    if (project.archived_at) return NextResponse.json({ error: "归档项目为只读，请恢复后再添加批注" }, { status: 409 });
     const review = await db.prepare("SELECT version_id, status FROM review_requests WHERE id = ? AND project_id = ?").bind(reviewId, projectId).first<{ version_id: number; status: string }>();
     if (!review) return NextResponse.json({ error: "审核任务不存在" }, { status: 404 });
     if (review.status !== "pending") return NextResponse.json({ error: "审核已结束，不能继续添加意见" }, { status: 409 });
@@ -42,7 +43,8 @@ export async function PATCH(request: NextRequest, context: RouteContext<"/api/pr
     if (!commentId) return NextResponse.json({ error: "缺少审核意见 ID" }, { status: 400 });
     const db = await getDatabase();
     const identity = await resolveIdentity(request, db);
-    await requireProjectAccess(db, identity, projectId, "editor");
+    const project = await requireProjectAccess(db, identity, projectId, "editor");
+    if (project.archived_at) return NextResponse.json({ error: "归档项目为只读，请恢复后再处理批注" }, { status: 409 });
     const resolved = body?.resolved !== false;
     const result = resolved
       ? await db.prepare(`UPDATE review_comments SET status = 'resolved', resolved_by = ?, resolved_at = CURRENT_TIMESTAMP
@@ -57,4 +59,3 @@ export async function PATCH(request: NextRequest, context: RouteContext<"/api/pr
     return NextResponse.json({ error: errorMessage(error) }, { status });
   }
 }
-

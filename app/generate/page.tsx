@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useState, useRef } from "react";
+import React, { useEffect, useState, useRef } from "react";
 import Link from "next/link";
 import { theme } from "../ui-config";
 import { documentTypeLabel, normalizeUsageTags, usageTagOptions, type KnowledgeUsageTag } from "../knowledge";
@@ -128,10 +128,46 @@ export default function GuidedGeneratePage() {
   const [officialError, setOfficialError] = useState<string | null>(null);
   const [fetchingOfficialUrls, setFetchingOfficialUrls] = useState<string[]>([]);
   const [manualOfficialUrl, setManualOfficialUrl] = useState("");
+  const [restoredProjectTitle, setRestoredProjectTitle] = useState("");
 
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [manualKeyword, setManualKeyword] = useState("");
+
+  useEffect(() => {
+    const resumedProjectId = new URLSearchParams(window.location.search).get("projectId");
+    if (!resumedProjectId) return;
+    const controller = new AbortController();
+    void fetch(`/api/projects/${encodeURIComponent(resumedProjectId)}?view=resume`, { cache: "no-store", signal: controller.signal }).then(async (response) => {
+      const payload = await response.json() as { project?: { id: string; title: string; document_type: string; task_json: string }; error?: string };
+      if (!response.ok || !payload.project) throw new Error(payload.error || "续写项目加载失败");
+      let parsedTask: Partial<WritingTask> = {};
+      try { const value: unknown = JSON.parse(payload.project.task_json || "{}"); if (value && typeof value === "object") parsedTask = value as Partial<WritingTask>; } catch { parsedTask = {}; }
+      const documentType = ordinaryDocumentTypes.find((item) => item === parsedTask.documentType || item === payload.project?.document_type) ?? "工作报告";
+      const preset = writingTaskPresets[documentType];
+      const focusValues = typeof parsedTask.focus === "string" ? parsedTask.focus.split(/[、,，；;]/).map((item) => item.trim()).filter((item) => preset.focusOptions.includes(item)) : [];
+      const resumedTask: WritingTask = {
+        title: payload.project.title,
+        documentType,
+        documentSubtype: typeof parsedTask.documentSubtype === "string" ? parsedTask.documentSubtype : "",
+        department: typeof parsedTask.department === "string" ? parsedTask.department : "",
+        audience: typeof parsedTask.audience === "string" ? parsedTask.audience : "",
+        purpose: typeof parsedTask.purpose === "string" ? parsedTask.purpose : "",
+        timeRange: typeof parsedTask.timeRange === "string" ? parsedTask.timeRange : "",
+        focus: typeof parsedTask.focus === "string" ? parsedTask.focus : "",
+      };
+      setProjectId(payload.project.id);
+      setRestoredProjectTitle(payload.project.title);
+      setTask(resumedTask);
+      setTaskTopic(payload.project.title.replace(/（续写）$/, ""));
+      setPlanningType(documentType);
+      setSelectedScenarioId(preset.scenarios[0].id);
+      setSelectedFocuses(focusValues.length ? focusValues : preset.focusOptions.slice(0, 4));
+      setSelectedTimeRange(resumedTask.timeRange);
+      setSelectedAudience(resumedTask.audience);
+    }).catch((caught: unknown) => { if (!(caught instanceof DOMException)) setError(caught instanceof Error ? caught.message : "续写项目加载失败"); });
+    return () => controller.abort();
+  }, []);
 
   const currentPreset = writingTaskPresets[planningType];
   const selectedScenario = currentPreset.scenarios.find((item) => item.id === selectedScenarioId) ?? currentPreset.scenarios[0];
@@ -658,6 +694,7 @@ export default function GuidedGeneratePage() {
       {/* 第1步：用户表达任务，AI主动补全任务单并生成完整提纲 */}
       {step === 1 && (
         <form onSubmit={handleStep1Submit} className="space-y-6">
+          {restoredProjectTitle && <section className="rounded border border-teal-200 bg-teal-50/40 px-4 py-3 text-xs leading-5 text-teal-900"><p className="font-bold">已从归档档案创建续写项目</p><p className="mt-1">已带入原项目的文种、任务信息和参考资料配置。确认短主题后，AI会重新规划本次材料，原归档项目不会被修改。</p></section>}
           <div>
             <p className="text-[10px] font-bold uppercase tracking-wider text-teal-700">AI任务规划</p>
             <h3 className={`${theme.sectionTitle} mt-1`}>点选写作场景，只填写一个短主题</h3>
