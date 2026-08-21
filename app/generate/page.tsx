@@ -92,7 +92,9 @@ interface ReviewIssue {
 export default function GuidedGeneratePage() {
   const [step, setStep] = useState(1);
   const [projectId, setProjectId] = useState<string | null>(null);
-  const [finalVersionId, setFinalVersionId] = useState<number | null>(null);
+  const [submittedVersionId, setSubmittedVersionId] = useState<number | null>(null);
+  const [reviewRequestId, setReviewRequestId] = useState<string | null>(null);
+  const [generationSources, setGenerationSources] = useState<unknown[]>([]);
 
   // 向导内部表单状态
   const [topic, setTopic] = useState("");
@@ -474,6 +476,7 @@ export default function GuidedGeneratePage() {
       if (typeof data.text !== "string" || !data.text.trim()) throw new Error("AI 未返回有效草稿");
       setResultDraft(data.text);
       setDraftAudit(data.draftAudit ?? null);
+      setGenerationSources(Array.isArray(data.sources) ? data.sources : []);
       if (projectId) {
         const versionResponse = await fetch(`/api/projects/${projectId}/versions`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ stage: "ai_draft", content: data.text, sources: data.sources ?? [], audit: data.draftAudit ?? {} }) });
         if (!versionResponse.ok) throw new Error("草稿已生成，但项目版本保存失败");
@@ -528,7 +531,7 @@ export default function GuidedGeneratePage() {
   const handleExportDocx = async () => {
     setExporting(true);
     try {
-      const response = await fetch("/api/export-docx", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ title: task.title || topic, content: body, projectId, draftVersionId: finalVersionId }) });
+      const response = await fetch("/api/export-docx", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ title: task.title || topic, content: body, projectId, draftVersionId: submittedVersionId }) });
       if (!response.ok) throw new Error("DOCX 导出失败");
       const blob = await response.blob();
       const url = URL.createObjectURL(blob);
@@ -543,13 +546,17 @@ export default function GuidedGeneratePage() {
     setLoading(true); setError(null);
     try {
       if (projectId) {
-        const response = await fetch(`/api/projects/${projectId}/versions`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ stage: "final", content: resultDraft, audit: { draftAudit, reviewIssues } }) });
+        const response = await fetch(`/api/projects/${projectId}/versions`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ stage: "edited", content: resultDraft, sources: generationSources, audit: { draftAudit, reviewIssues } }) });
         const data = await response.json() as { id?: number; error?: string };
-        if (!response.ok || !data.id) throw new Error(data.error || "最终稿归档失败");
-        setFinalVersionId(data.id);
+        if (!response.ok || !data.id) throw new Error(data.error || "送审稿保存失败");
+        setSubmittedVersionId(data.id);
+        const reviewResponse = await fetch(`/api/projects/${projectId}/reviews`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ versionId: data.id, summary: `完成AI起草与合规诊断，提交“${task.title || topic}”审核。` }) });
+        const reviewData = await reviewResponse.json() as { id?: string; error?: string };
+        if (!reviewResponse.ok || !reviewData.id) throw new Error(reviewData.error || "提交审核失败");
+        setReviewRequestId(reviewData.id);
       }
       setStep(6);
-    } catch (caught: unknown) { setError(caught instanceof Error ? caught.message : "最终稿归档失败"); }
+    } catch (caught: unknown) { setError(caught instanceof Error ? caught.message : "提交审核失败"); }
     finally { setLoading(false); }
   };
 
@@ -1068,7 +1075,7 @@ export default function GuidedGeneratePage() {
 
           <div className="flex justify-between border-t pt-4">
             <button onClick={() => setStep(4)} className={theme.secondaryBtn}>上一步</button>
-            <button onClick={handleFinalize} disabled={loading} className={`${theme.primaryBtn} disabled:opacity-50`}>{loading ? "正在归档…" : "最终确认：归档公文"}</button>
+            <button onClick={handleFinalize} disabled={loading} className={`${theme.primaryBtn} disabled:opacity-50`}>{loading ? "正在提交…" : "确认送审：进入协同审核"}</button>
           </div>
         </div>
       )}
@@ -1081,17 +1088,19 @@ export default function GuidedGeneratePage() {
             <div className="space-y-3 font-serif text-[16px] leading-8">{body.split(/\n+/).filter(Boolean).map((paragraph, index) => <p key={index} className="indent-8">{paragraph}</p>)}</div>
           </section>
           <div className="inline-flex items-center justify-center w-12 h-12 bg-emerald-50 text-emerald-600 border border-emerald-200 rounded-full text-2xl mb-2 font-bold">✓</div>
-          <h2 className="text-lg font-bold text-slate-900">第6步：公文撰写完成并已安全归档！</h2>
-          <p className="text-xs text-slate-400 max-w-sm mx-auto">正文及来源引用条目已在本地完成持久化。</p>
+          <h2 className="text-lg font-bold text-slate-900">第6步：送审稿已保存并进入协同审核</h2>
+          <p className="text-xs text-slate-400 max-w-lg mx-auto">正文、来源和引用核验记录已经保存。审核人员确认通过后，系统将生成不可混淆的最终版本。</p>
+          {reviewRequestId && <p className="text-[10px] text-slate-400">审核任务：{reviewRequestId}</p>}
           <div className="p-4 bg-slate-50/50 border rounded text-left max-w-xl mx-auto">
             <div className="max-h-40 overflow-y-auto text-xs text-slate-600 leading-relaxed whitespace-pre-wrap font-sans">
               {resultDraft}
             </div>
           </div>
           <div className="border-t pt-6 space-x-3">
-            <button onClick={() => { navigator.clipboard.writeText(resultDraft); alert("公文已被成功复制。"); }} className={theme.secondaryBtn}>复制公文最终稿</button>
-            <button onClick={handleExportDocx} disabled={exporting} className={theme.primaryBtn}>{exporting ? "正在生成 DOCX…" : "下载公文 DOCX"}</button>
-            <button onClick={() => { setStep(1); setProjectId(null); setFinalVersionId(null); setTopic(""); setPlanningType("auto"); setShowMoreTypes(false); setSelectedScenarioId(writingTaskPresets.auto.scenarios[0].id); setTaskTopic(""); setSelectedTimeRange(""); setSelectedAudience(""); setSelectedFocuses(writingTaskPresets.auto.focusOptions.slice(0, 4)); setExtraRequirement(""); setTask({ title: "", documentType: "工作报告", documentSubtype: "", department: "", audience: "", purpose: "", timeRange: "", focus: "" }); setAnalysis(null); setTaskAssumptions([]); setConfirmedOutline([]); setPoints(""); setNewData(""); setResultDraft(""); setDraftAudit(null); setOfficialWritingPlan(""); setOfficialCandidates([]); setOfficialSections([]); setSelectedOfficialSources([]); setManualOfficialUrl(""); }} className={theme.primaryBtn}>拟写新篇公文</button>
+            <button onClick={() => { navigator.clipboard.writeText(resultDraft); alert("送审稿已复制。"); }} className={theme.secondaryBtn}>复制送审稿</button>
+            <button onClick={handleExportDocx} disabled={exporting} className={theme.secondaryBtn}>{exporting ? "正在生成 DOCX…" : "下载送审稿 DOCX"}</button>
+            {projectId && <Link href={`/projects/${projectId}`} className={theme.primaryBtn}>进入项目审核台</Link>}
+            <button onClick={() => { setStep(1); setProjectId(null); setSubmittedVersionId(null); setReviewRequestId(null); setGenerationSources([]); setTopic(""); setPlanningType("auto"); setShowMoreTypes(false); setSelectedScenarioId(writingTaskPresets.auto.scenarios[0].id); setTaskTopic(""); setSelectedTimeRange(""); setSelectedAudience(""); setSelectedFocuses(writingTaskPresets.auto.focusOptions.slice(0, 4)); setExtraRequirement(""); setTask({ title: "", documentType: "工作报告", documentSubtype: "", department: "", audience: "", purpose: "", timeRange: "", focus: "" }); setAnalysis(null); setTaskAssumptions([]); setConfirmedOutline([]); setPoints(""); setNewData(""); setResultDraft(""); setDraftAudit(null); setOfficialWritingPlan(""); setOfficialCandidates([]); setOfficialSections([]); setSelectedOfficialSources([]); setManualOfficialUrl(""); }} className={theme.primaryBtn}>拟写新篇公文</button>
           </div>
         </div>
       )}

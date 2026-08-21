@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getDatabase } from "../../../_platform";
-import { identityError, resolveIdentity, writeActivity } from "../../../_identity";
+import { authorizationError, identityError, requireProjectAccess, resolveIdentity, writeActivity } from "../../../_identity";
 import { errorMessage } from "../../../_shared";
 
 const stages = ["ai_draft", "edited", "reviewed", "final"] as const;
@@ -15,6 +15,7 @@ export async function POST(request: NextRequest, context: RouteContext<"/api/pro
     if (content.length > 150_000) return NextResponse.json({ error: "正文超过版本保存上限" }, { status: 413 });
     const db = await getDatabase();
     const identity = await resolveIdentity(request, db);
+    await requireProjectAccess(db, identity, projectId, "editor");
     const project = await db.prepare("SELECT id FROM writing_projects WHERE id = ? AND workspace_id = ? AND archived_at IS NULL")
       .bind(projectId, identity.workspaceId).first();
     if (!project) return NextResponse.json({ error: "项目不存在或已归档" }, { status: 404 });
@@ -29,7 +30,6 @@ export async function POST(request: NextRequest, context: RouteContext<"/api/pro
     await writeActivity(db, identity, `draft.${stage}`, "writing_project", projectId, { versionId });
     return NextResponse.json({ id: versionId, stage, status }, { status: 201 });
   } catch (error: unknown) {
-    return NextResponse.json({ error: errorMessage(error) }, { status: identityError(error) ? 401 : 500 });
+    return NextResponse.json({ error: errorMessage(error) }, { status: identityError(error) ? 401 : authorizationError(error) ? 403 : 500 });
   }
 }
-

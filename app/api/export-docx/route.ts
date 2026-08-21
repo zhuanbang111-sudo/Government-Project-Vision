@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { AlignmentType, convertMillimetersToTwip, Document, LineRuleType, Packer, Paragraph, TextRun } from "docx";
 import { getPlatformEnv } from "../_platform";
-import { identityError, resolveIdentity, writeActivity } from "../_identity";
+import { authorizationError, identityError, requireProjectAccess, resolveIdentity, writeActivity } from "../_identity";
 
 const THREE_POINT_SIZE = 32;
 const SECOND_POINT_SIZE = 44;
@@ -105,6 +105,7 @@ export async function POST(request: NextRequest) {
     if (typeof body.projectId === "string" && body.projectId) {
       const { APP_DB, DOCUMENTS_BUCKET } = await getPlatformEnv();
       const identity = await resolveIdentity(request, APP_DB);
+      await requireProjectAccess(APP_DB, identity, body.projectId, "viewer");
       const project = await APP_DB.prepare("SELECT id, current_version_id FROM writing_projects WHERE id = ? AND workspace_id = ? AND archived_at IS NULL")
         .bind(body.projectId, identity.workspaceId).first<{ id: string; current_version_id: number | null }>();
       if (!project) return NextResponse.json({ error: "写作项目不存在或无权访问" }, { status: 404 });
@@ -126,6 +127,6 @@ export async function POST(request: NextRequest) {
   } catch (error) {
     if (error instanceof RequestSizeError) return NextResponse.json({ error: error.message }, { status: 413 });
     console.error("DOCX export failed", error);
-    return NextResponse.json({ error: error instanceof Error ? error.message : "DOCX 导出失败" }, { status: identityError(error) ? 401 : 500 });
+    return NextResponse.json({ error: error instanceof Error ? error.message : "DOCX 导出失败" }, { status: identityError(error) ? 401 : authorizationError(error) ? 403 : 500 });
   }
 }

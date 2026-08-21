@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getDatabase, placeholders } from "../../../_platform";
-import { identityError, resolveIdentity, writeActivity } from "../../../_identity";
+import { authorizationError, identityError, requireProjectAccess, resolveIdentity, writeActivity } from "../../../_identity";
 import { errorMessage } from "../../../_shared";
 
 export async function POST(request: NextRequest, context: RouteContext<"/api/projects/[id]/documents">) {
@@ -15,6 +15,7 @@ export async function POST(request: NextRequest, context: RouteContext<"/api/pro
     }).slice(0, 100) : [];
     const db = await getDatabase();
     const identity = await resolveIdentity(request, db);
+    await requireProjectAccess(db, identity, projectId, "editor");
     const project = await db.prepare("SELECT id FROM writing_projects WHERE id = ? AND workspace_id = ? AND archived_at IS NULL")
       .bind(projectId, identity.workspaceId).first();
     if (!project) return NextResponse.json({ error: "项目不存在或已归档" }, { status: 404 });
@@ -32,7 +33,6 @@ export async function POST(request: NextRequest, context: RouteContext<"/api/pro
     await writeActivity(db, identity, "project.materials_updated", "writing_project", projectId, { documentCount: ids.length, passageCount: entries.reduce((sum, item) => sum + item.selectedPassages.length, 0) });
     return NextResponse.json({ success: true, documentCount: ids.length });
   } catch (error: unknown) {
-    return NextResponse.json({ error: errorMessage(error) }, { status: identityError(error) ? 401 : 500 });
+    return NextResponse.json({ error: errorMessage(error) }, { status: identityError(error) ? 401 : authorizationError(error) ? 403 : 500 });
   }
 }
-

@@ -5,7 +5,7 @@ import { loadExternalReferencePassages, parseExternalReferences } from "../_offi
 import { rankReferenceDocuments, segmentDocumentContent, type RetrievalDocument } from "../_retrieval";
 import { getChatCompletionsUrl, getWritingAiSettings } from "../_settings";
 import { buildDraftAudit, type DraftSourceEntry } from "./draft-audit";
-import { identityError, resolveIdentity } from "../_identity";
+import { authorizationError, identityError, requireProjectAccess, resolveIdentity } from "../_identity";
 
 type ParagraphType = { id: number; name: string; description: string };
 const MAX_REFERENCE_DOCUMENTS = 6;
@@ -85,6 +85,7 @@ export async function POST(request: NextRequest) {
       : [];
     const db = await getDatabase();
     const identity = await resolveIdentity(request, db);
+    if (typeof projectId === "string" && projectId) await requireProjectAccess(db, identity, projectId, "editor");
     const linkedProjectId = typeof projectId === "string" && projectId
       ? (await db.prepare("SELECT id FROM writing_projects WHERE id = ? AND workspace_id = ? AND archived_at IS NULL").bind(projectId, identity.workspaceId).first<{ id: string }>())?.id ?? null
       : null;
@@ -227,6 +228,6 @@ export async function POST(request: NextRequest) {
     }
     const message = error instanceof Error ? error.message : "生成服务发生未知错误";
     const unavailable = error instanceof DOMException || /超时|fetch|network|ECONN|ENOTFOUND/i.test(message);
-    return NextResponse.json({ error: message, retryable: unavailable }, { status: identityError(error) ? 401 : unavailable ? 503 : 500 });
+    return NextResponse.json({ error: message, retryable: unavailable }, { status: identityError(error) ? 401 : authorizationError(error) ? 403 : unavailable ? 503 : 500 });
   }
 }

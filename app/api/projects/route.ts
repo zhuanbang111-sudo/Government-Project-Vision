@@ -15,14 +15,15 @@ export async function GET(request: NextRequest) {
     const db = await getDatabase();
     const identity = await resolveIdentity(request, db);
     const includeArchived = request.nextUrl.searchParams.get("archived") === "true";
+    const visibility = identity.role === "owner" ? "1 = 1" : "(p.owner_user_id = ? OR EXISTS (SELECT 1 FROM project_members pm WHERE pm.project_id = p.id AND pm.user_id = ?))";
     const { results } = await db.prepare(`SELECT p.id, p.title, p.document_type, p.status, p.owner_user_id,
         p.created_at, p.updated_at, p.archived_at, u.display_name AS owner_name,
         (SELECT COUNT(*) FROM project_documents pd WHERE pd.project_id = p.id) AS document_count,
         (SELECT COUNT(*) FROM draft_versions dv WHERE dv.project_id = p.id) AS version_count,
         (SELECT stage FROM draft_versions dv WHERE dv.project_id = p.id ORDER BY version_number DESC LIMIT 1) AS latest_stage
       FROM writing_projects p JOIN users u ON u.id = p.owner_user_id
-      WHERE p.workspace_id = ? AND (${includeArchived ? "1 = 1" : "p.archived_at IS NULL"})
-      ORDER BY p.updated_at DESC LIMIT 200`).bind(identity.workspaceId).all();
+      WHERE p.workspace_id = ? AND ${visibility} AND (${includeArchived ? "1 = 1" : "p.archived_at IS NULL"})
+      ORDER BY p.updated_at DESC LIMIT 200`).bind(identity.workspaceId, ...(identity.role === "owner" ? [] : [identity.userId, identity.userId])).all();
     return NextResponse.json({ projects: results, identity }, { headers: { "Cache-Control": "private, no-store" } });
   } catch (error: unknown) {
     return NextResponse.json({ error: errorMessage(error) }, { status: identityError(error) ? 401 : 500 });

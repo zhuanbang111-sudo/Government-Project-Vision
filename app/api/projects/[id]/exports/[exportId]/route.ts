@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getPlatformEnv } from "../../../../_platform";
-import { identityError, resolveIdentity, writeActivity } from "../../../../_identity";
+import { authorizationError, identityError, requireProjectAccess, resolveIdentity, writeActivity } from "../../../../_identity";
 import { errorMessage } from "../../../../_shared";
 
 export async function GET(request: NextRequest, context: RouteContext<"/api/projects/[id]/exports/[exportId]">) {
@@ -8,6 +8,7 @@ export async function GET(request: NextRequest, context: RouteContext<"/api/proj
     const { id, exportId } = await context.params;
     const { APP_DB, DOCUMENTS_BUCKET } = await getPlatformEnv();
     const identity = await resolveIdentity(request, APP_DB);
+    await requireProjectAccess(APP_DB, identity, id, "viewer");
     const item = await APP_DB.prepare(`SELECT e.object_key, e.filename, e.content_hash
       FROM project_exports e JOIN writing_projects p ON p.id = e.project_id
       WHERE e.id = ? AND e.project_id = ? AND p.workspace_id = ?`).bind(exportId, id, identity.workspaceId)
@@ -23,6 +24,6 @@ export async function GET(request: NextRequest, context: RouteContext<"/api/proj
       "Cache-Control": "private, no-store",
     } });
   } catch (error: unknown) {
-    return NextResponse.json({ error: errorMessage(error) }, { status: identityError(error) ? 401 : 500 });
+    return NextResponse.json({ error: errorMessage(error) }, { status: identityError(error) ? 401 : authorizationError(error) ? 403 : 500 });
   }
 }

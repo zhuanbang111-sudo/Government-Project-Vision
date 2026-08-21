@@ -2,6 +2,7 @@ import type { NextRequest } from "next/server";
 import type { D1DatabaseLike } from "./_platform";
 
 export type AppRole = "owner" | "reviewer" | "editor";
+export type ProjectPermission = "viewer" | "editor" | "reviewer" | "owner";
 
 export type RequestIdentity = {
   userId: string;
@@ -82,4 +83,26 @@ export async function writeActivity(db: D1DatabaseLike, identity: RequestIdentit
 
 export function identityError(error: unknown) {
   return error instanceof AuthenticationError;
+}
+
+const permissionRank: Record<ProjectPermission, number> = { viewer: 1, editor: 2, reviewer: 3, owner: 4 };
+
+export class AuthorizationError extends Error {}
+
+export async function requireProjectAccess(db: D1DatabaseLike, identity: RequestIdentity, projectId: string, required: ProjectPermission = "viewer") {
+  const project = await db.prepare(`SELECT p.id, p.owner_user_id, p.workspace_id, p.status, p.archived_at,
+      pm.role AS member_role
+    FROM writing_projects p LEFT JOIN project_members pm ON pm.project_id = p.id AND pm.user_id = ?
+    WHERE p.id = ? AND p.workspace_id = ?`).bind(identity.userId, projectId, identity.workspaceId).first<{
+      id: string; owner_user_id: string; workspace_id: string; status: string; archived_at: string | null; member_role: ProjectPermission | null;
+    }>();
+  if (!project) throw new AuthorizationError("项目不存在或无权访问");
+  const permission: ProjectPermission = project.owner_user_id === identity.userId || identity.role === "owner" ? "owner" : project.member_role ?? "viewer";
+  if (!project.member_role && project.owner_user_id !== identity.userId && identity.role !== "owner") throw new AuthorizationError("项目不存在或无权访问");
+  if (permissionRank[permission] < permissionRank[required]) throw new AuthorizationError("当前账号没有执行此操作的权限");
+  return { ...project, permission };
+}
+
+export function authorizationError(error: unknown) {
+  return error instanceof AuthorizationError;
 }
