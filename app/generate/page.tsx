@@ -653,34 +653,34 @@ export default function GuidedGeneratePage() {
   ];
 
   return (
-    <div className={`mx-auto bg-white p-6 sm:p-8 rounded border border-slate-200 shadow-sm transition-all ${step === 5 ? "max-w-6xl" : step === 2 || step === 4 ? "max-w-5xl" : "max-w-3xl"}`}>
+    <div className={`mx-auto rounded border border-slate-200 bg-white shadow-sm transition-all ${step === 1 ? "max-w-4xl p-4 sm:p-5" : "p-6 sm:p-8"} ${step === 5 ? "max-w-6xl" : step === 2 || step === 4 ? "max-w-5xl" : step === 1 ? "" : "max-w-3xl"}`}>
       
       {/* 顶部指示器 */}
-      <div className="border-b border-slate-100 pb-6 mb-6">
-        <div className="flex justify-between items-center mb-6">
+      <div className={`${step === 1 ? "mb-4 pb-4" : "mb-6 pb-6"} border-b border-slate-100`}>
+        <div className={`${step === 1 ? "mb-3" : "mb-6"} flex items-center justify-between`}>
           <span className="text-[10px] font-bold text-teal-800 tracking-wider uppercase">政务公文拟文向导</span>
-          <Link href="/" className="text-xs text-slate-400 hover:text-slate-600">放弃并返回首页</Link>
+          <Link href="/" className="rounded px-2 py-1 text-[10px] text-slate-400 transition hover:bg-slate-50 hover:text-slate-600" aria-label="退出拟文并返回首页">退出 ×</Link>
         </div>
 
-        <div className="flex justify-between items-center relative">
-          <div className="absolute top-4 left-0 right-0 h-0.5 bg-slate-100 -z-10"></div>
+        <div className="relative grid grid-cols-6 gap-1 sm:gap-2">
+          <div className="absolute left-[8%] right-[8%] top-3 h-px bg-slate-100"></div>
           {stepsDef.map((s) => {
             const isCompleted = step > s.num;
             const isActive = step === s.num;
             return (
-              <div key={s.num} className="flex flex-col items-center flex-1 relative z-10">
+              <div key={s.num} className="relative z-10 flex min-w-0 flex-col items-center">
                 <div
-                  className={`w-8 h-8 rounded-full flex items-center justify-center text-xs font-bold transition-all border ${
+                  className={`flex h-6 w-6 items-center justify-center rounded-full border text-[10px] font-bold transition-all ${
                     isCompleted
                       ? "bg-emerald-50 border-emerald-300 text-emerald-700"
                       : isActive
-                      ? "bg-teal-800 border-teal-800 text-white shadow-sm scale-110"
+                      ? "bg-teal-800 border-teal-800 text-white shadow-sm"
                       : "bg-white border-slate-200 text-slate-400"
                   }`}
                 >
                   {isCompleted ? "✓" : s.num}
                 </div>
-                <span className={`text-[10px] mt-2 font-medium ${isActive ? "text-teal-800 font-bold" : "text-slate-400"}`}>
+                <span className={`mt-1 hidden truncate text-[9px] font-medium sm:block ${isActive ? "font-bold text-teal-800" : "text-slate-400"}`}>
                   {s.name}
                 </span>
               </div>
@@ -693,55 +693,58 @@ export default function GuidedGeneratePage() {
 
       {/* 第1步：用户表达任务，AI主动补全任务单并生成完整提纲 */}
       {step === 1 && (
-        <form onSubmit={handleStep1Submit} className="space-y-6">
+        <form onSubmit={handleStep1Submit} className="space-y-4">
           {restoredProjectTitle && <section className="rounded border border-teal-200 bg-teal-50/40 px-4 py-3 text-xs leading-5 text-teal-900"><p className="font-bold">已从归档档案创建续写项目</p><p className="mt-1">已带入原项目的文种、任务信息和参考资料配置。确认短主题后，AI会重新规划本次材料，原归档项目不会被修改。</p></section>}
-          <div>
+          <div className="flex flex-wrap items-end justify-between gap-2">
+            <div>
             <p className="text-[10px] font-bold uppercase tracking-wider text-teal-700">AI任务规划</p>
-            <h3 className={`${theme.sectionTitle} mt-1`}>点选写作场景，只填写一个短主题</h3>
-            <p className="mt-2 text-xs leading-5 text-slate-500">系统会把您的选择自动组合成完整任务描述，再由AI补全标题、任务信息和提纲。明确选择的文种不会被AI覆盖。</p>
-          </div>
-
-          <fieldset>
-            <legend className={theme.label}>1. 选择文种</legend>
-            <div className="grid grid-cols-2 gap-2 sm:grid-cols-3">
-              {primaryPlanningTypes.map((documentType) => <button key={documentType} type="button" aria-pressed={planningType === documentType} onClick={() => selectPlanningType(documentType)} className={`rounded border px-3 py-3 text-left text-xs transition ${planningType === documentType ? "border-teal-700 bg-teal-50 font-bold text-teal-800 shadow-sm" : "border-slate-200 bg-white text-slate-600 hover:border-teal-200"}`}><span className="block">{documentType === "auto" ? "让AI判断" : documentType}</span>{documentType === "auto" && <span className="mt-1 block text-[9px] font-normal text-slate-400">不确定文种时使用</span>}</button>)}
+              <h3 className="mt-1 text-lg font-bold text-slate-900">选择场景，填写一个短主题</h3>
             </div>
-            <button type="button" onClick={() => setShowMoreTypes((current) => !current)} className="mt-2 text-[10px] font-semibold text-teal-700 hover:underline">{showMoreTypes ? "收起其他文种" : "更多文种"}</button>
-            {showMoreTypes && <div className="mt-2 flex flex-wrap gap-2">{ordinaryDocumentTypes.filter((documentType) => !primaryPlanningTypes.includes(documentType)).map((documentType) => <button key={documentType} type="button" aria-pressed={planningType === documentType} onClick={() => selectPlanningType(documentType)} className={`rounded-full border px-3 py-1.5 text-[10px] ${planningType === documentType ? "border-teal-700 bg-teal-50 font-semibold text-teal-800" : "border-slate-200 bg-white text-slate-500"}`}>{documentType}</button>)}</div>}
-          </fieldset>
+            <p className="max-w-xl text-[10px] leading-4 text-slate-400">AI将自动补全标题、任务信息和提纲；明确选择的文种不会被覆盖。</p>
+          </div>
 
-          <fieldset>
-            <legend className={theme.label}>2. 选择常用场景</legend>
-            <div className="grid gap-2 sm:grid-cols-3">
-              {currentPreset.scenarios.map((scenario) => <button key={scenario.id} type="button" aria-pressed={selectedScenario.id === scenario.id} onClick={() => selectScenario(scenario.id)} className={`rounded border p-3 text-left transition ${selectedScenario.id === scenario.id ? "border-teal-600 bg-teal-50/70 shadow-sm" : "border-slate-200 bg-white hover:border-teal-200"}`}><span className="block text-xs font-semibold text-slate-800">{scenario.name}</span><span className="mt-1 block text-[10px] leading-4 text-slate-400">{scenario.description}</span></button>)}
+          {!analysis && <section className="space-y-4 rounded-lg border border-slate-200 bg-slate-50/30 p-4">
+            <fieldset>
+              <legend className="sr-only">1. 写什么</legend>
+              <div className="mb-2 flex items-center justify-between gap-3"><span aria-hidden="true" className="text-xs font-bold text-slate-600">1. 写什么</span><span className="text-[9px] text-slate-400">不确定时选择“AI判断”</span></div>
+              <div className="flex flex-wrap gap-2">
+                {primaryPlanningTypes.map((documentType) => <button key={documentType} type="button" aria-pressed={planningType === documentType} onClick={() => selectPlanningType(documentType)} className={`rounded-full border px-3 py-1.5 text-[11px] transition ${planningType === documentType ? "border-teal-700 bg-teal-50 font-bold text-teal-800 shadow-sm" : "border-slate-200 bg-white text-slate-600 hover:border-teal-300"}`}>{documentType === "auto" ? "AI判断" : documentType}</button>)}
+                <button type="button" aria-expanded={showMoreTypes} onClick={() => setShowMoreTypes((current) => !current)} className="rounded-full border border-dashed border-slate-300 bg-white px-3 py-1.5 text-[11px] font-semibold text-teal-700 hover:border-teal-300">{showMoreTypes ? "收起" : "更多文种⌄"}</button>
+              </div>
+              {showMoreTypes && <div className="mt-2 flex flex-wrap gap-2 rounded border border-slate-100 bg-white p-2">{ordinaryDocumentTypes.filter((documentType) => !primaryPlanningTypes.includes(documentType)).map((documentType) => <button key={documentType} type="button" aria-pressed={planningType === documentType} onClick={() => { selectPlanningType(documentType); setShowMoreTypes(false); }} className={`rounded-full border px-3 py-1.5 text-[10px] ${planningType === documentType ? "border-teal-700 bg-teal-50 font-semibold text-teal-800" : "border-slate-200 bg-white text-slate-500 hover:border-teal-200"}`}>{documentType}</button>)}</div>}
+            </fieldset>
+
+            <fieldset className="border-t border-slate-100 pt-3">
+              <legend className="mb-2 text-xs font-bold text-slate-600">2. 用于什么场景</legend>
+              <div className="flex flex-wrap gap-2">
+                {currentPreset.scenarios.slice(0, 4).map((scenario) => <button key={scenario.id} type="button" aria-pressed={selectedScenario.id === scenario.id} title={scenario.description} onClick={() => selectScenario(scenario.id)} className={`rounded border px-3 py-2 text-left text-[11px] font-semibold transition ${selectedScenario.id === scenario.id ? "border-teal-600 bg-teal-50 text-teal-900 shadow-sm" : "border-slate-200 bg-white text-slate-700 hover:border-teal-200"}`}>{scenario.name}</button>)}
+                {currentPreset.scenarios.length > 4 && <details className="relative"><summary className="cursor-pointer list-none rounded border border-dashed border-slate-300 bg-white px-3 py-2 text-[11px] font-semibold text-teal-700">更多场景⌄</summary><div className="absolute right-0 top-10 z-20 min-w-44 rounded border border-slate-200 bg-white p-2 shadow-lg">{currentPreset.scenarios.slice(4).map((scenario) => <button key={scenario.id} type="button" title={scenario.description} onClick={() => selectScenario(scenario.id)} className="block w-full rounded px-3 py-2 text-left text-[11px] font-semibold text-slate-700 hover:bg-teal-50">{scenario.name}</button>)}</div></details>}
+              </div>
+              <p className="mt-2 text-[10px] text-slate-400">{selectedScenario.description}</p>
+            </fieldset>
+
+            <div className="border-t border-slate-100 pt-3">
+              <label htmlFor="writing-task-topic" className="mb-2 block text-xs font-bold text-slate-600">3. 补充短主题</label>
+              <input id="writing-task-topic" required minLength={2} maxLength={120} autoFocus autoComplete="off" value={taskTopic} onChange={(event) => { setTaskTopic(event.target.value); invalidateTaskPlan(); }} placeholder={`${currentPreset.topicPlaceholder}，无需编写完整提示词`} className={`${theme.input} bg-white text-sm font-medium`} />
             </div>
-          </fieldset>
+          </section>}
 
-          <div>
-            <label htmlFor="writing-task-topic" className={theme.label}>3. {currentPreset.topicLabel}</label>
-            <input id="writing-task-topic" required minLength={2} maxLength={120} autoFocus autoComplete="off" value={taskTopic} onChange={(event) => { setTaskTopic(event.target.value); invalidateTaskPlan(); }} placeholder={currentPreset.topicPlaceholder} className={`${theme.input} text-sm font-medium`} />
-          </div>
+          {!analysis && <details className="rounded border border-slate-200 bg-white px-4 py-3">
+            <summary className="cursor-pointer text-[11px] font-semibold text-slate-600">可选调整：时间、报送对象、写作重点和特殊要求</summary>
+            <div className="mt-4 space-y-4 border-t border-slate-100 pt-4">
+              <div className="grid gap-4 sm:grid-cols-2">
+                <fieldset><legend className={theme.label}>时间范围</legend><div className="flex flex-wrap gap-2">{timeRangeOptions.map((value) => <button key={value} type="button" aria-pressed={selectedTimeRange === value} onClick={() => { setSelectedTimeRange((current) => current === value ? "" : value); invalidateTaskPlan(); }} className={`rounded-full border px-3 py-1.5 text-[10px] ${selectedTimeRange === value ? "border-teal-600 bg-teal-50 font-semibold text-teal-800" : "border-slate-200 text-slate-500"}`}>{value}</button>)}</div></fieldset>
+                <fieldset><legend className={theme.label}>报送对象</legend><div className="flex flex-wrap gap-2">{audienceOptions.map((value) => <button key={value} type="button" aria-pressed={selectedAudience === value} onClick={() => { setSelectedAudience((current) => current === value ? "" : value); invalidateTaskPlan(); }} className={`rounded-full border px-3 py-1.5 text-[10px] ${selectedAudience === value ? "border-teal-600 bg-teal-50 font-semibold text-teal-800" : "border-slate-200 text-slate-500"}`}>{value}</button>)}</div></fieldset>
+              </div>
+              <fieldset><legend className={theme.label}>重点内容（AI已推荐）</legend><div className="flex flex-wrap gap-2">{currentPreset.focusOptions.map((focus) => <button key={focus} type="button" aria-pressed={selectedFocuses.includes(focus)} onClick={() => toggleFocus(focus)} className={`rounded-full border px-3 py-1.5 text-[10px] ${selectedFocuses.includes(focus) ? "border-teal-600 bg-teal-50 font-semibold text-teal-800" : "border-slate-200 bg-white text-slate-500"}`}>{selectedFocuses.includes(focus) ? "✓ " : "+ "}{focus}</button>)}</div></fieldset>
+              <div><label htmlFor="writing-extra-requirement" className={theme.label}>特殊要求</label><textarea id="writing-extra-requirement" rows={2} maxLength={1000} value={extraRequirement} onChange={(event) => { setExtraRequirement(event.target.value); invalidateTaskPlan(); }} placeholder="例如：控制在3000字以内，突出问题导向……" className={theme.input} /></div>
+            </div>
+          </details>}
 
-          <div className="grid gap-5 sm:grid-cols-2">
-            <fieldset><legend className={theme.label}>时间范围（可不选）</legend><div className="flex flex-wrap gap-2">{timeRangeOptions.map((value) => <button key={value} type="button" aria-pressed={selectedTimeRange === value} onClick={() => { setSelectedTimeRange((current) => current === value ? "" : value); invalidateTaskPlan(); }} className={`rounded-full border px-3 py-1.5 text-[10px] ${selectedTimeRange === value ? "border-teal-600 bg-teal-50 font-semibold text-teal-800" : "border-slate-200 text-slate-500"}`}>{value}</button>)}</div></fieldset>
-            <fieldset><legend className={theme.label}>报送对象（可不选）</legend><div className="flex flex-wrap gap-2">{audienceOptions.map((value) => <button key={value} type="button" aria-pressed={selectedAudience === value} onClick={() => { setSelectedAudience((current) => current === value ? "" : value); invalidateTaskPlan(); }} className={`rounded-full border px-3 py-1.5 text-[10px] ${selectedAudience === value ? "border-teal-600 bg-teal-50 font-semibold text-teal-800" : "border-slate-200 text-slate-500"}`}>{value}</button>)}</div></fieldset>
-          </div>
-
-          <fieldset>
-            <legend className={theme.label}>重点内容（已自动推荐，可直接使用）</legend>
-            <div className="flex flex-wrap gap-2">{currentPreset.focusOptions.map((focus) => <button key={focus} type="button" aria-pressed={selectedFocuses.includes(focus)} onClick={() => toggleFocus(focus)} className={`rounded-full border px-3 py-1.5 text-[10px] ${selectedFocuses.includes(focus) ? "border-teal-600 bg-teal-50 font-semibold text-teal-800" : "border-slate-200 bg-white text-slate-500"}`}>{selectedFocuses.includes(focus) ? "✓ " : "+ "}{focus}</button>)}</div>
-          </fieldset>
-
-          <details className="rounded border border-slate-200 bg-slate-50/30 p-3">
-            <summary className="cursor-pointer text-[11px] font-semibold text-slate-600">补充特殊要求（可不填）</summary>
-            <textarea rows={2} maxLength={1000} value={extraRequirement} onChange={(event) => { setExtraRequirement(event.target.value); invalidateTaskPlan(); }} placeholder="例如：控制在3000字以内，突出问题导向……" className={`${theme.input} mt-3`} />
-          </details>
-
-          {!analysis && <section className="rounded border border-teal-100 bg-teal-50/30 px-4 py-3 text-xs leading-5 text-teal-900"><p className="text-[10px] font-bold text-teal-700">系统将自动形成的任务描述</p><p className="mt-1">{taskTopic.trim().length >= 2 ? generatedTaskBrief : `填写${currentPreset.topicLabel}后，系统会在这里自动组合完整任务。`}</p></section>}
-
-          {!analysis && <div className="flex justify-end border-t border-slate-100 pt-4">
-            <button type="submit" disabled={loading || taskTopic.trim().length < 2} className={`${theme.primaryBtn} disabled:cursor-not-allowed disabled:opacity-50`}>{loading ? "AI正在理解任务…" : "让AI规划写作任务"}</button>
-          </div>}
+          {!analysis && <section className="flex flex-col gap-3 rounded border border-teal-100 bg-teal-50/30 px-4 py-3 sm:flex-row sm:items-center sm:justify-between">
+            <div className="min-w-0"><p className="text-[10px] font-bold text-teal-700">AI任务摘要</p><p className="mt-1 line-clamp-2 text-[11px] leading-5 text-teal-950">{taskTopic.trim().length >= 2 ? generatedTaskBrief : `选择文种和场景，再填写${currentPreset.topicLabel}。`}</p></div>
+            <button type="submit" disabled={loading || taskTopic.trim().length < 2} className={`${theme.primaryBtn} shrink-0 disabled:cursor-not-allowed disabled:opacity-50`}>{loading ? "AI正在理解任务…" : "让AI规划任务 →"}</button>
+          </section>}
 
           {analysis && <div className="space-y-5">
             <section className="rounded border border-teal-200 bg-teal-50/30 p-5">
