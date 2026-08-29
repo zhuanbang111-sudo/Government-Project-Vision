@@ -16,7 +16,7 @@ VALUES ('default-department', '默认部门', 'DEFAULT', 'system-owner');
 ALTER TABLE users ADD COLUMN username TEXT;
 ALTER TABLE users ADD COLUMN password_hash TEXT;
 ALTER TABLE users ADD COLUMN password_salt TEXT;
-ALTER TABLE users ADD COLUMN password_iterations INTEGER NOT NULL DEFAULT 150000;
+ALTER TABLE users ADD COLUMN password_iterations INTEGER NOT NULL DEFAULT 100000;
 ALTER TABLE users ADD COLUMN system_role TEXT NOT NULL DEFAULT 'user' CHECK (system_role IN ('super_admin', 'admin', 'reviewer', 'user'));
 ALTER TABLE users ADD COLUMN department_id TEXT REFERENCES departments(id);
 ALTER TABLE users ADD COLUMN must_change_password INTEGER NOT NULL DEFAULT 0 CHECK (must_change_password IN (0, 1));
@@ -108,4 +108,3 @@ ALTER TABLE writing_projects ADD COLUMN visibility TEXT NOT NULL DEFAULT 'person
 ALTER TABLE writing_projects ADD COLUMN department_id TEXT REFERENCES departments(id);
 UPDATE writing_projects SET department_id = (SELECT department_id FROM users WHERE users.id = writing_projects.owner_user_id) WHERE department_id IS NULL;
 CREATE INDEX IF NOT EXISTS writing_projects_scope_idx ON writing_projects(workspace_id, visibility, department_id, owner_user_id, updated_at DESC);
-

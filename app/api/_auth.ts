@@ -2,7 +2,8 @@ import type { NextRequest, NextResponse } from "next/server";
 import type { D1DatabaseLike } from "./_platform";
 
 export const SESSION_COOKIE = "gp_session";
-export const PASSWORD_ITERATIONS = 150_000;
+// Cloudflare Workers WebCrypto currently caps PBKDF2 at 100,000 iterations.
+export const PASSWORD_ITERATIONS = 100_000;
 const SESSION_SECONDS = 60 * 60 * 12;
 export type SystemRole = "super_admin" | "admin" | "reviewer" | "user";
 const encoder = new TextEncoder();
