@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import type { WritingAnalysis, WritingPlan, WritingTask } from "../../../types/writing";
 import { getDocumentTemplate, ordinaryDocumentTypes } from "../../document-templates";
 import { getDatabase } from "../_platform";
+import { resolveIdentity } from "../_identity";
 import { getChatCompletionsUrl, getWritingAiSettings } from "../_settings";
 
 const MAX_REQUEST_BYTES = 24_000;
@@ -181,6 +182,7 @@ function sanitizePlan(candidate: unknown, fallback: WritingPlan, lockedDocumentT
 
 export async function POST(request: NextRequest) {
   try {
+    const db = await getDatabase(); await resolveIdentity(request, db);
     const body = await readBoundedJson(request) as AnalysisRequest | null;
     if (!body || typeof body !== "object") return NextResponse.json({ error: "请求内容格式不正确" }, { status: 400 });
     const legacyBrief = [body.title, body.documentType, body.department, body.purpose, body.focus].filter((item) => typeof item === "string" && item.trim()).join("，");
@@ -194,7 +196,6 @@ export async function POST(request: NextRequest) {
     const key = process.env.DEEPSEEK_API_KEY;
     if (!key) return NextResponse.json(fallback);
     try {
-      const db = await getDatabase();
       const settings = await getWritingAiSettings(db);
       const response = await fetch(getChatCompletionsUrl(settings.baseUrl), {
         method: "POST",

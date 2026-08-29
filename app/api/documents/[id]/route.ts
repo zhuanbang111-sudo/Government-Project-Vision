@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { normalizeDocumentType, normalizeTopicTags, normalizeUsageTags } from "../../../knowledge";
 import { errorMessage } from "../../_shared";
 import { getPlatformEnv } from "../../_platform";
-import { identityError, resolveIdentity, writeActivity } from "../../_identity";
+import { documentScope, identityError, resolveIdentity, writeActivity } from "../../_identity";
 
 type UpdatePayload = {
   department?: unknown;
@@ -24,11 +24,12 @@ export async function GET(request: NextRequest, context: RouteContext<"/api/docu
     if (!id) return NextResponse.json({ error: "无效文档 ID" }, { status: 400 });
     const { APP_DB } = await getPlatformEnv();
     const identity = await resolveIdentity(request, APP_DB);
+    const scope = documentScope(identity, "documents");
     const document = await APP_DB.prepare(
       `SELECT id, filename, content, file_size, department, document_type, usage_tags, topic_tags,
               processing_status, vector_status, verification_status, created_at, updated_at
-       FROM documents WHERE id = ? AND workspace_id = ? AND deleted_at IS NULL`,
-    ).bind(id, identity.workspaceId).first();
+       FROM documents WHERE id = ? AND workspace_id = ? AND deleted_at IS NULL AND ${scope.sql}`,
+    ).bind(id, identity.workspaceId, ...scope.bindings).first();
     if (!document) return NextResponse.json({ error: "文档不存在" }, { status: 404 });
     return NextResponse.json(document);
   } catch (error: unknown) {
@@ -52,11 +53,13 @@ export async function PATCH(request: NextRequest, context: RouteContext<"/api/do
 
     const { APP_DB } = await getPlatformEnv();
     const identity = await resolveIdentity(request, APP_DB);
+    const writable = identity.systemRole === "admin" || identity.systemRole === "super_admin" ? "1 = 1" : "owner_user_id = ?";
+    const writableBindings = identity.systemRole === "admin" || identity.systemRole === "super_admin" ? [] : [identity.userId];
     const metadata = JSON.stringify({ usageTags, topicTags, verificationStatus });
     const result = await APP_DB.prepare(
       `UPDATE documents SET department = ?, document_type = ?, usage_tags = ?, topic_tags = ?,
-       processing_status = ?, verification_status = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ? AND workspace_id = ? AND deleted_at IS NULL`,
-    ).bind(department, documentType, JSON.stringify(usageTags), JSON.stringify(topicTags), processingStatus, verificationStatus, id, identity.workspaceId).run();
+       processing_status = ?, verification_status = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ? AND workspace_id = ? AND deleted_at IS NULL AND ${writable}`,
+    ).bind(department, documentType, JSON.stringify(usageTags), JSON.stringify(topicTags), processingStatus, verificationStatus, id, identity.workspaceId, ...writableBindings).run();
     if (!result.meta.changes) return NextResponse.json({ error: "文档不存在" }, { status: 404 });
     await APP_DB.prepare("UPDATE knowledge_assets SET knowledge_type = ?, metadata = ?, source = ? WHERE document_id = ?")
       .bind(documentType, metadata, department, id).run();
@@ -73,10 +76,12 @@ export async function DELETE(request: NextRequest, context: RouteContext<"/api/d
     if (!id) return NextResponse.json({ error: "无效文档 ID" }, { status: 400 });
     const { APP_DB } = await getPlatformEnv();
     const identity = await resolveIdentity(request, APP_DB);
-    const document = await APP_DB.prepare("SELECT object_key FROM documents WHERE id = ? AND workspace_id = ? AND deleted_at IS NULL").bind(id, identity.workspaceId).first<{ object_key: string }>();
+    const writable = identity.systemRole === "admin" || identity.systemRole === "super_admin" ? "1 = 1" : "owner_user_id = ?";
+    const writableBindings = identity.systemRole === "admin" || identity.systemRole === "super_admin" ? [] : [identity.userId];
+    const document = await APP_DB.prepare(`SELECT object_key FROM documents WHERE id = ? AND workspace_id = ? AND deleted_at IS NULL AND ${writable}`).bind(id, identity.workspaceId, ...writableBindings).first<{ object_key: string }>();
     if (!document) return NextResponse.json({ error: "文档不存在" }, { status: 404 });
-    await APP_DB.prepare("UPDATE documents SET deleted_at = CURRENT_TIMESTAMP, processing_status = 'disabled', updated_at = CURRENT_TIMESTAMP WHERE id = ? AND workspace_id = ?")
-      .bind(id, identity.workspaceId).run();
+    await APP_DB.prepare(`UPDATE documents SET deleted_at = CURRENT_TIMESTAMP, processing_status = 'disabled', updated_at = CURRENT_TIMESTAMP WHERE id = ? AND workspace_id = ? AND ${writable}`)
+      .bind(id, identity.workspaceId, ...writableBindings).run();
     await writeActivity(APP_DB, identity, "document.archived", "document", id, { objectKey: document.object_key });
     return NextResponse.json({ success: true, fileRemoved: false, recoverable: true });
   } catch (error: unknown) {

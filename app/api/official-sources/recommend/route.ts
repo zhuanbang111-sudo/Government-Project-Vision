@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getDatabase } from "../../_platform";
+import { resolveIdentity } from "../../_identity";
 import { getChatCompletionsUrl, getWritingAiSettings } from "../../_settings";
 import { isOfficialGovernmentUrl, stripHtml } from "../../_official-sources";
 import { isOfficialPageNoise, validateAndStoreOfficialSource, type SelectedOfficialSource } from "../_source-service";
@@ -146,6 +147,7 @@ async function buildSearchPlan(topic: string, documentType: string, outline: str
 
 export async function POST(request: NextRequest) {
   try {
+    const db = await getDatabase(); await resolveIdentity(request, db);
     const body = await request.json() as { topic?: unknown; documentType?: unknown; outline?: unknown; coverage?: unknown };
     if (typeof body.topic !== "string" || !body.topic.trim() || !Array.isArray(body.outline)) return NextResponse.json({ error: "主题和完整提纲不能为空" }, { status: 400 });
     const topic = body.topic.trim().slice(0, 300);

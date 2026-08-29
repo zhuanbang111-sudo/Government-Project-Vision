@@ -1,9 +1,12 @@
 import { NextRequest, NextResponse } from "next/server";
 import { isOfficialGovernmentUrl } from "../../_official-sources";
 import { OfficialSourceValidationError, validateAndStoreOfficialSource } from "../_source-service";
+import { getDatabase } from "../../_platform";
+import { resolveIdentity } from "../../_identity";
 
 export async function POST(request: NextRequest) {
   try {
+    await resolveIdentity(request, await getDatabase());
     const body = await request.json() as { url?: unknown; title?: unknown; topic?: unknown; outline?: unknown; section?: unknown; uses?: unknown };
     if (typeof body.url !== "string") return NextResponse.json({ error: "政府官网链接不能为空" }, { status: 400 });
     if (!isOfficialGovernmentUrl(body.url)) return NextResponse.json({ error: "仅允许提取使用 HTTPS 的中国政府部门官网（.gov.cn）链接" }, { status: 400 });

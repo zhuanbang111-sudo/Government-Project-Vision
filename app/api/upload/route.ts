@@ -24,6 +24,8 @@ export async function POST(request: NextRequest) {
     const topicTags = normalizeTopicTags(formData.get("topicTags"));
     const { APP_DB, DOCUMENTS_BUCKET } = await getPlatformEnv();
     const identity = await resolveIdentity(request, APP_DB);
+    const requestedVisibility = String(formData.get("visibility") || "department");
+    const visibility = requestedVisibility === "personal" || requestedVisibility === "workspace" ? requestedVisibility : "department";
     const details: Array<{ filename: string; status: "success" | "fail"; message: string; id?: number }> = [];
 
     for (const [index, file] of files.entries()) {
@@ -56,8 +58,8 @@ export async function POST(request: NextRequest) {
           `INSERT INTO documents
             (filename, object_key, file_type, content, department, library_type, file_size, document_type,
              usage_tags, topic_tags, processing_status, vector_status, verification_status, content_hash, updated_at,
-             workspace_id, owner_user_id)
-           VALUES (?, ?, 'docx', ?, ?, 'reference', ?, ?, ?, ?, 'ready', 'pending', 'unverified', ?, CURRENT_TIMESTAMP, ?, ?)`,
+             workspace_id, owner_user_id, visibility, department_id)
+           VALUES (?, ?, 'docx', ?, ?, 'reference', ?, ?, ?, ?, 'ready', 'pending', 'unverified', ?, CURRENT_TIMESTAMP, ?, ?, ?, ?)`,
         ).bind(
           file.name,
           objectKey,
@@ -70,6 +72,8 @@ export async function POST(request: NextRequest) {
           fileHash,
           identity.workspaceId,
           identity.userId,
+          visibility,
+          identity.departmentId,
         ).run();
         const documentId = Number(created.meta.last_row_id);
         await APP_DB.prepare(

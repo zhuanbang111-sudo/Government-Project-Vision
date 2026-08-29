@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { normalizeDocumentType, writingTypeToKnowledgeType } from "../../knowledge";
 import { getDatabase } from "../_platform";
 import { rankPassagesByOutline, rankReferenceDocuments, type RetrievalDocument } from "../_retrieval";
-import { identityError, resolveIdentity } from "../_identity";
+import { documentScope, identityError, resolveIdentity } from "../_identity";
 
 export async function POST(request: NextRequest) {
   try {
@@ -15,10 +15,11 @@ export async function POST(request: NextRequest) {
       : null;
     const db = await getDatabase();
     const identity = await resolveIdentity(request, db);
+    const scope = documentScope(identity, "documents");
     const { results: documents } = await db.prepare(
       `SELECT id, filename, content, department, document_type, usage_tags, topic_tags, verification_status, vector_data
-       FROM documents WHERE workspace_id = ? AND deleted_at IS NULL AND processing_status = 'ready' ORDER BY created_at DESC LIMIT 500`,
-    ).bind(identity.workspaceId).all<RetrievalDocument>();
+       FROM documents WHERE workspace_id = ? AND deleted_at IS NULL AND processing_status = 'ready' AND ${scope.sql} ORDER BY created_at DESC LIMIT 500`,
+    ).bind(identity.workspaceId, ...scope.bindings).all<RetrievalDocument>();
     const ranked = await rankReferenceDocuments({
       documents,
       query: body.query.trim(),

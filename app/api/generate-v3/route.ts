@@ -5,7 +5,7 @@ import { loadExternalReferencePassages, parseExternalReferences } from "../_offi
 import { rankReferenceDocuments, segmentDocumentContent, type RetrievalDocument } from "../_retrieval";
 import { getChatCompletionsUrl, getWritingAiSettings } from "../_settings";
 import { buildDraftAudit, type DraftSourceEntry } from "./draft-audit";
-import { authorizationError, identityError, requireProjectAccess, resolveIdentity } from "../_identity";
+import { authorizationError, documentScope, identityError, requireProjectAccess, resolveIdentity } from "../_identity";
 
 type ParagraphType = { id: number; name: string; description: string };
 const MAX_REFERENCE_DOCUMENTS = 6;
@@ -91,13 +91,14 @@ export async function POST(request: NextRequest) {
       : null;
     if (typeof projectId === "string" && projectId && !linkedProjectId) return NextResponse.json({ error: "写作项目不存在或无权访问" }, { status: 404 });
     const aiSettings = await getWritingAiSettings(db);
+    const scope = documentScope(identity, "documents");
     const selectSql = `SELECT id, filename, content, department, document_type, usage_tags, topic_tags,
-      verification_status, vector_data FROM documents WHERE workspace_id = ? AND deleted_at IS NULL AND processing_status = 'ready'`;
+      verification_status, vector_data FROM documents WHERE workspace_id = ? AND deleted_at IS NULL AND processing_status = 'ready' AND ${scope.sql}`;
     const documents = selectedIdsProvided
       ? ids.length
-        ? (await db.prepare(`${selectSql} AND id IN (${placeholders(ids)})`).bind(identity.workspaceId, ...ids).all<RetrievalDocument>()).results
+        ? (await db.prepare(`${selectSql} AND id IN (${placeholders(ids)})`).bind(identity.workspaceId, ...scope.bindings, ...ids).all<RetrievalDocument>()).results
         : []
-      : (await db.prepare(`${selectSql} ORDER BY verification_status DESC, created_at DESC LIMIT 500`).bind(identity.workspaceId).all<RetrievalDocument>()).results;
+      : (await db.prepare(`${selectSql} ORDER BY verification_status DESC, created_at DESC LIMIT 500`).bind(identity.workspaceId, ...scope.bindings).all<RetrievalDocument>()).results;
     const requestedExternalReferences = parseExternalReferences(externalReferences);
 
     const retrievalQuery = `${topic}\n${documentType}\n${documentSubtype}\n${points}\n${requiredUses.join(" ")}`.slice(0, MAX_INPUT_CHARS);

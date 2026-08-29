@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getDatabase, placeholders } from "../../../_platform";
-import { authorizationError, identityError, requireProjectAccess, resolveIdentity, writeActivity } from "../../../_identity";
+import { authorizationError, documentScope, identityError, requireProjectAccess, resolveIdentity, writeActivity } from "../../../_identity";
 import { errorMessage } from "../../../_shared";
 
 export async function POST(request: NextRequest, context: RouteContext<"/api/projects/[id]/documents">) {
@@ -21,8 +21,9 @@ export async function POST(request: NextRequest, context: RouteContext<"/api/pro
     if (!project) return NextResponse.json({ error: "项目不存在或已归档" }, { status: 404 });
     const ids = [...new Set(entries.map((item) => item.documentId))];
     if (ids.length) {
-      const available = await db.prepare(`SELECT id FROM documents WHERE workspace_id = ? AND deleted_at IS NULL AND id IN (${placeholders(ids)})`)
-        .bind(identity.workspaceId, ...ids).all<{ id: number }>();
+      const scope = documentScope(identity, "documents");
+      const available = await db.prepare(`SELECT id FROM documents WHERE workspace_id = ? AND deleted_at IS NULL AND ${scope.sql} AND id IN (${placeholders(ids)})`)
+        .bind(identity.workspaceId, ...scope.bindings, ...ids).all<{ id: number }>();
       if (available.results.length !== ids.length) return NextResponse.json({ error: "部分资料不存在或无权访问" }, { status: 403 });
     }
     const statements = [db.prepare("DELETE FROM project_documents WHERE project_id = ?").bind(projectId), ...entries.map((item) => db.prepare(`INSERT INTO project_documents

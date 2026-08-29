@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { getPlatformEnv } from "../_platform";
 import { getWritingAiSettings, getChatCompletionsUrl, validateWritingAiSettings } from "../_settings";
 import { errorMessage } from "../_shared";
+import { requireSystemRole, resolveIdentity } from "../_identity";
 
 export const dynamic = "force-dynamic";
 
@@ -46,8 +47,9 @@ async function getSettingsPayload() {
   };
 }
 
-export async function GET() {
+export async function GET(request: NextRequest) {
   try {
+    const { APP_DB } = await getPlatformEnv(); requireSystemRole(await resolveIdentity(request, APP_DB));
     return NextResponse.json(await getSettingsPayload());
   } catch (error) {
     return NextResponse.json({ error: errorMessage(error) }, { status: 500 });
@@ -56,6 +58,7 @@ export async function GET() {
 
 export async function PUT(request: NextRequest) {
   try {
+    const env = await getPlatformEnv(); requireSystemRole(await resolveIdentity(request, env.APP_DB));
     const body: unknown = await request.json();
     const { baseUrl, model } = body as { baseUrl?: unknown; model?: unknown };
     const settings = validateWritingAiSettings(baseUrl, model);
@@ -72,6 +75,7 @@ export async function PUT(request: NextRequest) {
 
 export async function POST(request: NextRequest) {
   try {
+    const env = await getPlatformEnv(); requireSystemRole(await resolveIdentity(request, env.APP_DB));
     const body: unknown = await request.json();
     const action = (body as { action?: unknown }).action;
     const { APP_DB, DOCUMENTS_BUCKET } = await getPlatformEnv();
