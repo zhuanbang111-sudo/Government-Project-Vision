@@ -40,7 +40,7 @@ export async function GET(request: NextRequest, context: RouteContext<"/api/proj
       db.prepare(`SELECT d.id, d.filename, d.document_type, d.department, d.verification_status,
           pd.usage_tags, pd.selected_passages, pd.created_at
         FROM project_documents pd JOIN documents d ON d.id = pd.document_id
-        WHERE pd.project_id = ? AND d.deleted_at IS NULL ORDER BY pd.created_at DESC`).bind(id).all(),
+        WHERE pd.project_id = ? AND d.owner_user_id = ? AND d.deleted_at IS NULL ORDER BY pd.created_at DESC`).bind(id, identity.userId).all(),
       db.prepare(`SELECT id, draft_version_id, filename, object_key, content_hash, file_size, created_at
         FROM project_exports WHERE project_id = ? ORDER BY created_at DESC`).bind(id).all(),
       db.prepare(`SELECT a.action, a.entity_type, a.entity_id, a.details, a.created_at, u.display_name AS actor_name

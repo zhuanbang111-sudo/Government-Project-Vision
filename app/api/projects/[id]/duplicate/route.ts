@@ -25,8 +25,10 @@ export async function POST(request: NextRequest, context: RouteContext<"/api/pro
         ),
       db.prepare(`INSERT INTO project_documents
         (project_id, document_id, usage_tags, selected_passages, created_by)
-        SELECT ?, document_id, usage_tags, selected_passages, ? FROM project_documents WHERE project_id = ?`)
-        .bind(projectId, identity.userId, sourceProjectId),
+        SELECT ?, pd.document_id, pd.usage_tags, pd.selected_passages, ?
+        FROM project_documents pd JOIN documents d ON d.id = pd.document_id
+        WHERE pd.project_id = ? AND d.owner_user_id = ? AND d.deleted_at IS NULL`)
+        .bind(projectId, identity.userId, sourceProjectId, identity.userId),
     ]);
     await writeActivity(db, identity, "project.created_from_archive", "writing_project", projectId, { sourceProjectId });
     await writeActivity(db, identity, "project.used_as_template", "writing_project", sourceProjectId, { newProjectId: projectId });

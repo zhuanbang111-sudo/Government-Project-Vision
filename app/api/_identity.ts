@@ -62,9 +62,10 @@ export function authorizationError(error: unknown) { return error instanceof Aut
 export function requireSystemRole(identity: RequestIdentity, roles: SystemRole[] = ["admin", "super_admin"]) { if (!roles.includes(identity.systemRole)) throw new AuthorizationError("当前账号没有管理员权限"); }
 
 export function documentScope(identity: RequestIdentity, alias = "documents") {
-  if (identity.systemRole === "super_admin" || identity.systemRole === "admin") return { sql: "1 = 1", bindings: [] as unknown[] };
   const prefix = alias ? `${alias}.` : "";
-  return { sql: `(${prefix}visibility = 'workspace' OR ${prefix}owner_user_id = ? OR (${prefix}visibility = 'department' AND ${prefix}department_id = ?))`, bindings: [identity.userId, identity.departmentId ?? ""] as unknown[] };
+  // Reference corpora are private by default and by enforcement. System roles may
+  // administer accounts and aggregate counts, but never inherit access to user text.
+  return { sql: `${prefix}owner_user_id = ?`, bindings: [identity.userId] as unknown[] };
 }
 
 const permissionRank: Record<ProjectPermission, number> = { viewer: 1, editor: 2, reviewer: 3, owner: 4 };

@@ -24,8 +24,6 @@ export async function POST(request: NextRequest) {
     const topicTags = normalizeTopicTags(formData.get("topicTags"));
     const { APP_DB, DOCUMENTS_BUCKET } = await getPlatformEnv();
     const identity = await resolveIdentity(request, APP_DB);
-    const requestedVisibility = String(formData.get("visibility") || "department");
-    const visibility = requestedVisibility === "personal" || requestedVisibility === "workspace" ? requestedVisibility : "department";
     const details: Array<{ filename: string; status: "success" | "fail"; message: string; id?: number }> = [];
 
     for (const [index, file] of files.entries()) {
@@ -38,8 +36,8 @@ export async function POST(request: NextRequest) {
         if (typeof extracted !== "string" || typeof fileHash !== "string" || !/^[a-f0-9]{64}$/i.test(fileHash)) {
           throw new Error("文档解析信息无效，请重新选择文件");
         }
-        const duplicate = await APP_DB.prepare("SELECT id, filename FROM documents WHERE workspace_id = ? AND content_hash = ? AND deleted_at IS NULL LIMIT 1")
-          .bind(identity.workspaceId, fileHash).first<{ id: number; filename: string }>();
+        const duplicate = await APP_DB.prepare("SELECT id, filename FROM documents WHERE workspace_id = ? AND owner_user_id = ? AND content_hash = ? AND deleted_at IS NULL LIMIT 1")
+          .bind(identity.workspaceId, identity.userId, fileHash).first<{ id: number; filename: string }>();
         if (duplicate) throw new Error(`该文件与“${duplicate.filename}”内容重复`);
 
         const content = extracted.trim();
@@ -50,7 +48,7 @@ export async function POST(request: NextRequest) {
         const usageTags = requestedUsageTags.length ? requestedUsageTags : inferred.usageTags;
 
         const bytes = await file.arrayBuffer();
-        objectKey = `documents/${crypto.randomUUID()}.docx`;
+        objectKey = `documents/${identity.userId}/${crypto.randomUUID()}.docx`;
         await DOCUMENTS_BUCKET.put(objectKey, bytes, {
           httpMetadata: { contentType: file.type || "application/vnd.openxmlformats-officedocument.wordprocessingml.document" },
         });
@@ -72,8 +70,8 @@ export async function POST(request: NextRequest) {
           fileHash,
           identity.workspaceId,
           identity.userId,
-          visibility,
-          identity.departmentId,
+          "personal",
+          null,
         ).run();
         const documentId = Number(created.meta.last_row_id);
         await APP_DB.prepare(
@@ -91,7 +89,7 @@ export async function POST(request: NextRequest) {
           (document_id, version_number, object_key, content_hash, file_size, created_by)
           VALUES (?, 1, ?, ?, ?, ?)`).bind(documentId, objectKey, fileHash, file.size, identity.userId).run();
         await writeActivity(APP_DB, identity, "document.uploaded", "document", documentId, { filename: file.name, fileSize: file.size, documentType });
-        details.push({ filename: file.name, status: "success", message: "原文件已存入 R2，知识元数据已写入 D1", id: documentId });
+        details.push({ filename: file.name, status: "success", message: "已存入您的个人语料库，仅当前账号可检索和使用", id: documentId });
       } catch (error: unknown) {
         if (objectKey) await DOCUMENTS_BUCKET.delete(objectKey).catch(() => undefined);
         details.push({ filename: file.name, status: "fail", message: errorMessage(error) });

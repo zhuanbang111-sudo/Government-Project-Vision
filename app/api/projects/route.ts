@@ -30,14 +30,15 @@ export async function GET(request: NextRequest) {
     const [projectResult, countResult] = await Promise.all([
       db.prepare(`SELECT p.id, p.title, p.document_type, p.status, p.owner_user_id,
         p.created_at, p.updated_at, p.archived_at, u.display_name AS owner_name,
-        (SELECT COUNT(*) FROM project_documents pd WHERE pd.project_id = p.id) AS document_count,
+        (SELECT COUNT(*) FROM project_documents pd JOIN documents d ON d.id = pd.document_id
+          WHERE pd.project_id = p.id AND d.owner_user_id = ?) AS document_count,
         (SELECT COUNT(*) FROM draft_versions dv WHERE dv.project_id = p.id) AS version_count,
         (SELECT COUNT(*) FROM project_exports pe WHERE pe.project_id = p.id) AS export_count,
         (SELECT id FROM project_exports pe WHERE pe.project_id = p.id ORDER BY created_at DESC LIMIT 1) AS latest_export_id,
         (SELECT stage FROM draft_versions dv WHERE dv.project_id = p.id ORDER BY version_number DESC LIMIT 1) AS latest_stage
       FROM writing_projects p JOIN users u ON u.id = p.owner_user_id
       WHERE p.workspace_id = ? AND ${visibility} AND (${viewCondition})
-      ORDER BY COALESCE(p.archived_at, p.updated_at) DESC LIMIT 200`).bind(...bindings).all(),
+      ORDER BY COALESCE(p.archived_at, p.updated_at) DESC LIMIT 200`).bind(identity.userId, ...bindings).all(),
       db.prepare(`SELECT
           SUM(CASE WHEN p.archived_at IS NULL AND p.status <> 'completed' THEN 1 ELSE 0 END) AS active,
           SUM(CASE WHEN p.archived_at IS NULL AND p.status = 'completed' THEN 1 ELSE 0 END) AS completed,

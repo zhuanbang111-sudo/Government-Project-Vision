@@ -53,8 +53,8 @@ export async function PATCH(request: NextRequest, context: RouteContext<"/api/do
 
     const { APP_DB } = await getPlatformEnv();
     const identity = await resolveIdentity(request, APP_DB);
-    const writable = identity.systemRole === "admin" || identity.systemRole === "super_admin" ? "1 = 1" : "owner_user_id = ?";
-    const writableBindings = identity.systemRole === "admin" || identity.systemRole === "super_admin" ? [] : [identity.userId];
+    const writable = "owner_user_id = ?";
+    const writableBindings = [identity.userId];
     const metadata = JSON.stringify({ usageTags, topicTags, verificationStatus });
     const result = await APP_DB.prepare(
       `UPDATE documents SET department = ?, document_type = ?, usage_tags = ?, topic_tags = ?,
@@ -76,8 +76,8 @@ export async function DELETE(request: NextRequest, context: RouteContext<"/api/d
     if (!id) return NextResponse.json({ error: "无效文档 ID" }, { status: 400 });
     const { APP_DB } = await getPlatformEnv();
     const identity = await resolveIdentity(request, APP_DB);
-    const writable = identity.systemRole === "admin" || identity.systemRole === "super_admin" ? "1 = 1" : "owner_user_id = ?";
-    const writableBindings = identity.systemRole === "admin" || identity.systemRole === "super_admin" ? [] : [identity.userId];
+    const writable = "owner_user_id = ?";
+    const writableBindings = [identity.userId];
     const document = await APP_DB.prepare(`SELECT object_key FROM documents WHERE id = ? AND workspace_id = ? AND deleted_at IS NULL AND ${writable}`).bind(id, identity.workspaceId, ...writableBindings).first<{ object_key: string }>();
     if (!document) return NextResponse.json({ error: "文档不存在" }, { status: 404 });
     await APP_DB.prepare(`UPDATE documents SET deleted_at = CURRENT_TIMESTAMP, processing_status = 'disabled', updated_at = CURRENT_TIMESTAMP WHERE id = ? AND workspace_id = ? AND ${writable}`)

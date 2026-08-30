@@ -216,8 +216,8 @@ export default function LibraryPage() {
   return <div className="space-y-6">
     <header>
       <p className="text-xs font-bold tracking-widest text-teal-700">知识资产中心</p>
-      <h1 className="mt-2 text-3xl font-extrabold tracking-tight text-slate-900">让每份历史材料都能被准确检索和审计</h1>
-      <p className="mt-2 text-sm text-slate-500">按文种管理材料，用多用途标签决定 AI 如何使用，并保留来源、核验和向量化状态。</p>
+      <h1 className="mt-2 text-3xl font-extrabold tracking-tight text-slate-900">我的参考公文语料</h1>
+      <p className="mt-2 text-sm text-slate-500">您上传的原文、检索片段和写作引用均按账号隔离，其他用户及管理员不能读取或调用。</p>
     </header>
 
     {(notice || error) && <div className={`rounded border px-4 py-3 text-sm ${error ? "border-red-200 bg-red-50 text-red-700" : "border-emerald-200 bg-emerald-50 text-emerald-700"}`}>{error || notice}</div>}
@@ -235,8 +235,8 @@ export default function LibraryPage() {
 
     <div className="grid gap-6 xl:grid-cols-[340px_1fr]">
       <section className="h-fit rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
-        <h2 className="text-lg font-bold text-slate-900">录入参考公文</h2>
-        <p className="mt-1 text-xs leading-5 text-slate-500">仅支持 DOCX，单文件不超过 8MB。文种和用途可自动识别，也可人工指定。</p>
+        <h2 className="text-lg font-bold text-slate-900">录入个人参考公文</h2>
+        <p className="mt-1 text-xs leading-5 text-slate-500">仅支持 DOCX，单文件不超过 8MB。文件只进入当前账号的个人语料库，不会共享给部门或其他用户。</p>
         <form onSubmit={handleUpload} className="mt-5 space-y-4">
           <div><label className="text-xs font-semibold text-slate-700" htmlFor="knowledge-file">选择文件</label><input id="knowledge-file" type="file" accept=".docx" required onChange={(event) => setSelectedFile(event.target.files?.[0] ?? null)} className="mt-1 block w-full rounded-lg border border-slate-200 bg-slate-50 text-xs file:mr-3 file:border-0 file:bg-teal-50 file:px-3 file:py-2.5 file:font-semibold file:text-teal-800" /></div>
           <div><label className="text-xs font-semibold text-slate-700" htmlFor="department">归属处室</label><input id="department" autoComplete="organization" value={department} onChange={(event) => setDepartment(event.target.value)} placeholder="例如：城建处" className="mt-1 w-full rounded-lg border border-slate-200 p-2.5 text-xs outline-none focus:border-teal-600" /></div>
@@ -248,7 +248,7 @@ export default function LibraryPage() {
       </section>
 
       <section className="min-w-0 rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
-        <div className="flex flex-col gap-3 border-b border-slate-100 pb-4 lg:flex-row lg:items-center lg:justify-between"><div><h2 className="text-lg font-bold text-slate-900">资产仓库</h2><p className="mt-1 text-xs text-slate-400">共显示 {filteredDocuments.length} 份材料</p></div><input value={query} onChange={(event) => setQuery(event.target.value)} autoComplete="off" placeholder="检索文件名、处室或标签" className="w-full rounded-lg border border-slate-200 px-3 py-2.5 text-xs outline-none focus:border-teal-600 lg:w-72" /></div>
+        <div className="flex flex-col gap-3 border-b border-slate-100 pb-4 lg:flex-row lg:items-center lg:justify-between"><div><h2 className="text-lg font-bold text-slate-900">我的语料库</h2><p className="mt-1 text-xs text-slate-400">仅您可见 · 共显示 {filteredDocuments.length} 份材料</p></div><input value={query} onChange={(event) => setQuery(event.target.value)} autoComplete="off" placeholder="检索文件名、处室或标签" className="w-full rounded-lg border border-slate-200 px-3 py-2.5 text-xs outline-none focus:border-teal-600 lg:w-72" /></div>
         <div className="grid gap-2 py-4 sm:grid-cols-3">
           <select aria-label="按文种筛选" value={typeFilter} onChange={(event) => setTypeFilter(event.target.value)} className="rounded-lg border border-slate-200 bg-white p-2 text-xs"><option value="all">全部文种</option>{documentTypeOptions.map((item) => <option key={item.value} value={item.value}>{item.label}（{stats.types[item.value] ?? 0}）</option>)}</select>
           <select aria-label="按用途筛选" value={usageFilter} onChange={(event) => setUsageFilter(event.target.value)} className="rounded-lg border border-slate-200 bg-white p-2 text-xs"><option value="all">全部用途</option>{usageTagOptions.map((item) => <option key={item.value} value={item.value}>{item.label}</option>)}</select>
